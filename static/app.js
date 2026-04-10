@@ -1,6 +1,5 @@
 "use strict";
 
-let apiUrl = "";
 let messages = [];
 let streaming = false;
 
@@ -10,13 +9,7 @@ const sendBtn = document.getElementById("send-btn");
 const chatEl = document.getElementById("chat");
 
 async function init() {
-  try {
-    const resp = await fetch("/api/config");
-    const config = await resp.json();
-    apiUrl = config.apiUrl;
-  } catch (err) {
-    appendError("Failed to load configuration. Is the server running?");
-  }
+  // Server proxies /v1/* to the backend — no config discovery needed
 }
 
 function appendMessage(role, content) {
@@ -85,7 +78,7 @@ async function sendMessage() {
   let fullContent = "";
 
   try {
-    const resp = await fetch(apiUrl + "/v1/chat/completions", {
+    const resp = await fetch("/v1/chat/completions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
