@@ -1,0 +1,12 @@
+bin/
+server
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+.env
+.venv/
+__pycache__/
+.DS_Store
