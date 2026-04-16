@@ -250,3 +250,197 @@ footer {
   footer { padding: 10px 14px 14px; }
   #input { font-size: 16px; }
 }
+
+/* -- Rich streaming phases ------------------------------------------------- */
+
+/* Thinking panel — collapsed by default, shown as a quiet meta block above
+   the response content. Pulses while reasoning_content is still streaming. */
+.thinking-panel {
+  margin-bottom: 10px;
+  border-left: 3px solid var(--color-text-dim);
+  background: rgba(0, 0, 0, 0.03);
+  border-radius: 4px;
+  padding: 6px 10px;
+  font-size: 13px;
+  color: var(--color-text-dim);
+}
+
+.thinking-panel summary {
+  cursor: pointer;
+  user-select: none;
+  font-weight: 500;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.thinking-panel summary::before {
+  content: "▸";
+  display: inline-block;
+  transition: transform 0.15s;
+  font-size: 11px;
+}
+
+.thinking-panel[open] summary::before {
+  transform: rotate(90deg);
+}
+
+.thinking-panel:not(.done) summary::after {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  animation: pulse 1.2s ease-in-out infinite;
+  margin-left: 4px;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 1; }
+}
+
+.thinking-content {
+  margin-top: 8px;
+  white-space: pre-wrap;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  line-height: 1.5;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+/* Tool calls — discrete pills showing the agent's tool execution. */
+.tool-calls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.tool-call {
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.6);
+  font-size: 13px;
+}
+
+.tool-call.running {
+  border-color: var(--color-accent);
+  background: rgba(59, 130, 246, 0.06);
+}
+
+.tool-call.done {
+  border-color: #10b981;
+  background: rgba(16, 185, 129, 0.04);
+}
+
+.tool-call.error {
+  border-color: #dc2626;
+  background: rgba(220, 38, 38, 0.04);
+}
+
+.tool-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 500;
+}
+
+.tool-icon {
+  font-size: 14px;
+}
+
+.tool-name {
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+  color: var(--color-text);
+}
+
+.tool-status {
+  margin-left: auto;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--color-text-dim);
+}
+
+.tool-call.running .tool-status {
+  color: var(--color-accent);
+}
+
+.tool-call.running .tool-status::after {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  margin-left: 6px;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.tool-call.done .tool-status {
+  color: #047857;
+}
+
+.tool-call.error .tool-status {
+  color: #b91c1c;
+}
+
+.tool-args {
+  margin: 6px 0 0;
+  background: var(--color-code-bg);
+  color: var(--color-code-text);
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+  font-size: 12px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  min-height: 1.2em;
+}
+
+.tool-result {
+  margin-top: 6px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.04);
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.tool-call.error .tool-result {
+  color: #b91c1c;
+}
+
+/* Response content — the user-visible final answer. The streaming
+   indicator (cursor) is a separate element that lives next to it. */
+.response-content {
+  white-space: normal;
+}
+
+.response-content:empty + .streaming-indicator {
+  /* Hide the cursor before any content has arrived; the thinking panel
+     and tool pills already show progress. */
+  display: none;
+}
+
+.streaming-indicator {
+  display: inline-block;
+  width: 8px;
+  height: 14px;
+  background: var(--color-text-dim);
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  animation: blink 1s steps(1) infinite;
+}
+
+@keyframes blink {
+  50% { opacity: 0; }
+}
