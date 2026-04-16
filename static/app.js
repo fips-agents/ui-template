@@ -1,5 +1,8 @@
 "use strict";
 
+// Conversation history sent to the agent each turn. Only user and
+// assistant content are tracked; tool decisions / results are
+// agent-internal details and don't round-trip through the client.
 let messages = [];
 let streaming = false;
 
@@ -58,14 +61,12 @@ function renderContent(text) {
   });
 
   // Phase 3: Process block-level markdown on each line.
-  // Split into paragraphs (double newline), then lines within paragraphs.
   var paragraphs = safe.split(/\n\n+/);
   var rendered = [];
 
   for (var p = 0; p < paragraphs.length; p++) {
     var para = paragraphs[p];
 
-    // Check if this paragraph is a standalone code block placeholder
     if (/^\x00CODEBLOCK\d+\x00$/.test(para.trim())) {
       rendered.push(para.trim());
       continue;
@@ -73,13 +74,12 @@ function renderContent(text) {
 
     var lines = para.split("\n");
     var out = [];
-    var listType = null; // "ul" or "ol"
+    var listType = null;
     var listItems = [];
 
     for (var i = 0; i < lines.length; i++) {
       var line = lines[i];
 
-      // Check for list items — flush previous list if type changes
       var ulMatch = /^(\-|\*) (.+)$/.exec(line);
       var olMatch = /^(\d+)\. (.+)$/.exec(line);
 
@@ -103,14 +103,12 @@ function renderContent(text) {
         continue;
       }
 
-      // Not a list item — flush any open list
       if (listType) {
         out.push("<" + listType + ">" + listItems.join("") + "</" + listType + ">");
         listType = null;
         listItems = [];
       }
 
-      // Headers
       var headerMatch = /^(#{1,3}) (.+)$/.exec(line);
       if (headerMatch) {
         var level = headerMatch[1].length;
@@ -118,17 +116,13 @@ function renderContent(text) {
         continue;
       }
 
-      // Regular line — apply inline formatting
       out.push(processInline(line));
     }
 
-    // Flush trailing list
     if (listType) {
       out.push("<" + listType + ">" + listItems.join("") + "</" + listType + ">");
     }
 
-    // Join non-block lines with <br> for single newlines within a paragraph.
-    // Block elements (headers, lists, code blocks) are already self-contained.
     var joined = "";
     for (var j = 0; j < out.length; j++) {
       if (joined && !isBlockElement(out[j]) && !isBlockElement(out[j - 1 >= 0 ? j - 1 : 0])) {
@@ -142,8 +136,6 @@ function renderContent(text) {
     rendered.push(joined);
   }
 
-  // Join paragraphs — block-level elements don't need wrapping, but regular
-  // text paragraphs get <p> tags when there are multiple paragraphs.
   var result;
   if (rendered.length === 1) {
     result = rendered[0];
@@ -159,7 +151,6 @@ function renderContent(text) {
     result = parts.join("");
   }
 
-  // Phase 4: Restore code blocks and inline code.
   result = result.replace(/\x00CODEBLOCK(\d+)\x00/g, function (_, idx) {
     return codeBlocks[parseInt(idx, 10)];
   });
@@ -171,11 +162,8 @@ function renderContent(text) {
 }
 
 function processInline(text) {
-  // Links: [text](url) — process before bold/italic to avoid conflicts
   text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
-  // Bold: **text**
   text = text.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
-  // Italic: *text* (but not inside bold, which is already converted)
   text = text.replace(/\*(.+?)\*/g, "<em>$1</em>");
   return text;
 }
@@ -192,6 +180,193 @@ function setStreaming(value) {
   inputEl.disabled = value;
 }
 
+// -- Per-message stream renderer --------------------------------------------
+// Encapsulates the four-phase rendering (thinking / tool calls / response /
+// done) for a single assistant turn. Constructed when the user submits;
+// fed delta events as they arrive; finalized on stream completion.
+
+function createStreamRenderer(assistantEl) {
+  let thinkingPanel = null;     // <details> element, lazy-created
+  let thinkingContent = null;   // <div> inside thinkingPanel
+  let toolCallsContainer = null;
+  let responseEl = null;
+  let responseText = "";
+  let responseIndicator = null;
+
+  // Per-tool state: index -> { pillEl, nameEl, statusEl, argsEl, resultEl, args, name, callId }
+  const toolCalls = new Map();
+
+  function ensureThinkingPanel() {
+    if (thinkingPanel) return;
+    thinkingPanel = document.createElement("details");
+    thinkingPanel.className = "thinking-panel";
+    // Collapsed by default per design.
+    const summary = document.createElement("summary");
+    summary.textContent = "Thinking…";
+    thinkingPanel.appendChild(summary);
+    thinkingContent = document.createElement("div");
+    thinkingContent.className = "thinking-content";
+    thinkingPanel.appendChild(thinkingContent);
+    assistantEl.appendChild(thinkingPanel);
+  }
+
+  function ensureToolCallsContainer() {
+    if (toolCallsContainer) return;
+    toolCallsContainer = document.createElement("div");
+    toolCallsContainer.className = "tool-calls";
+    assistantEl.appendChild(toolCallsContainer);
+  }
+
+  function ensureResponseEl() {
+    if (responseEl) return;
+    responseEl = document.createElement("div");
+    responseEl.className = "response-content";
+    responseIndicator = document.createElement("span");
+    responseIndicator.className = "streaming-indicator";
+    assistantEl.appendChild(responseEl);
+    assistantEl.appendChild(responseIndicator);
+  }
+
+  function startToolCall(index, callId, name) {
+    ensureToolCallsContainer();
+    const pill = document.createElement("div");
+    pill.className = "tool-call running";
+
+    const header = document.createElement("div");
+    header.className = "tool-header";
+    const icon = document.createElement("span");
+    icon.className = "tool-icon";
+    icon.textContent = "⚙";
+    const nameEl = document.createElement("span");
+    nameEl.className = "tool-name";
+    nameEl.textContent = name;
+    const statusEl = document.createElement("span");
+    statusEl.className = "tool-status";
+    statusEl.textContent = "running";
+    header.appendChild(icon);
+    header.appendChild(nameEl);
+    header.appendChild(statusEl);
+
+    const argsEl = document.createElement("pre");
+    argsEl.className = "tool-args";
+    argsEl.textContent = "";
+
+    const resultEl = document.createElement("div");
+    resultEl.className = "tool-result";
+    resultEl.style.display = "none";
+
+    pill.appendChild(header);
+    pill.appendChild(argsEl);
+    pill.appendChild(resultEl);
+    toolCallsContainer.appendChild(pill);
+
+    toolCalls.set(index, {
+      pillEl: pill,
+      nameEl,
+      statusEl,
+      argsEl,
+      resultEl,
+      args: "",
+      name,
+      callId,
+    });
+    scrollToBottom();
+  }
+
+  function appendToolArgs(index, argsDelta) {
+    const tc = toolCalls.get(index);
+    if (!tc) return;
+    tc.args += argsDelta;
+    tc.argsEl.textContent = tc.args;
+    scrollToBottom();
+  }
+
+  function completeToolCall(callId, content, isError) {
+    // Find the matching tool call by call_id.
+    let match = null;
+    for (const tc of toolCalls.values()) {
+      if (tc.callId === callId) { match = tc; break; }
+    }
+    if (!match) return;
+    match.pillEl.classList.remove("running");
+    match.pillEl.classList.add(isError ? "error" : "done");
+    match.statusEl.textContent = isError ? "error" : "done";
+    match.resultEl.style.display = "block";
+    match.resultEl.textContent = content;
+    scrollToBottom();
+  }
+
+  function appendThinking(text) {
+    ensureThinkingPanel();
+    thinkingContent.textContent += text;
+    scrollToBottom();
+  }
+
+  function appendContent(text) {
+    ensureResponseEl();
+    responseText += text;
+    responseEl.innerHTML = renderContent(responseText);
+    // Re-attach indicator (re-render replaced it)
+    if (responseIndicator && !responseEl.contains(responseIndicator)) {
+      // indicator lives as sibling, not inside responseEl, so this is OK
+    }
+    scrollToBottom();
+  }
+
+  function finalize() {
+    // Remove the streaming cursor.
+    if (responseIndicator && responseIndicator.parentNode) {
+      responseIndicator.parentNode.removeChild(responseIndicator);
+    }
+    // Mark thinking panel as no longer pulsing.
+    if (thinkingPanel) {
+      thinkingPanel.classList.add("done");
+    }
+    // If there was no response content (e.g. tool-only turn), make
+    // that visible rather than leaving a blank message.
+    if (!responseText.trim() && !toolCalls.size && !thinkingPanel) {
+      assistantEl.textContent = "(no response)";
+    }
+  }
+
+  return {
+    handleDelta(delta) {
+      // Reasoning ("thinking") phase
+      if (delta.reasoning_content) {
+        appendThinking(delta.reasoning_content);
+      }
+      // Tool call deltas (decisions made by the model)
+      if (delta.tool_calls && Array.isArray(delta.tool_calls)) {
+        for (const tc of delta.tool_calls) {
+          const idx = tc.index ?? 0;
+          // First delta for this index brings id+name.
+          if (tc.id && !toolCalls.has(idx)) {
+            const name = (tc.function && tc.function.name) || "tool";
+            startToolCall(idx, tc.id, name);
+            // Some chunks include initial args along with id+name.
+            const initialArgs = tc.function && tc.function.arguments;
+            if (initialArgs) appendToolArgs(idx, initialArgs);
+          } else if (tc.function && tc.function.arguments) {
+            appendToolArgs(idx, tc.function.arguments);
+          }
+        }
+      }
+      // Tool execution result (role:"tool" message in the stream)
+      if (delta.role === "tool" && delta.tool_call_id) {
+        completeToolCall(delta.tool_call_id, delta.content || "", false);
+      }
+      // Assistant content (the user-visible response)
+      if (delta.content && delta.role !== "tool") {
+        appendContent(delta.content);
+      }
+      // delta.role === "assistant" with no other fields is a role
+      // announcement we can safely ignore.
+    },
+    finalize,
+    getResponseText: () => responseText,
+  };
+}
+
 async function sendMessage() {
   const text = inputEl.value.trim();
   if (!text || streaming) return;
@@ -201,16 +376,15 @@ async function sendMessage() {
   appendMessage("user", text);
   messages.push({ role: "user", content: text });
 
+  // Build the assistant message container and a renderer that owns it.
   const assistantEl = document.createElement("div");
   assistantEl.classList.add("message", "assistant");
-  const indicator = document.createElement("span");
-  indicator.classList.add("streaming-indicator");
-  assistantEl.appendChild(indicator);
   messagesEl.appendChild(assistantEl);
   scrollToBottom();
 
+  const renderer = createStreamRenderer(assistantEl);
+
   setStreaming(true);
-  let fullContent = "";
 
   try {
     const resp = await fetch("/v1/chat/completions", {
@@ -235,6 +409,9 @@ async function sendMessage() {
       if (done) break;
 
       buffer += decoder.decode(value, { stream: true });
+      // SSE messages are separated by blank lines (\n\n). A single
+      // ``data:`` line may also be split across read() boundaries, so
+      // we keep any incomplete trailing line in the buffer.
       const lines = buffer.split("\n");
       buffer = lines.pop() || "";
 
@@ -245,23 +422,27 @@ async function sendMessage() {
         const payload = trimmed.slice(5).trim();
         if (payload === "[DONE]") continue;
 
+        let parsed;
         try {
-          const parsed = JSON.parse(payload);
-          const delta = parsed.choices?.[0]?.delta?.content;
-          if (delta) {
-            fullContent += delta;
-            assistantEl.innerHTML = renderContent(fullContent);
-            indicator.classList.add("streaming-indicator");
-            assistantEl.appendChild(indicator);
-            scrollToBottom();
-          }
+          parsed = JSON.parse(payload);
         } catch {
-          // Skip malformed JSON lines
+          continue; // skip malformed
+        }
+
+        // Surface backend errors that arrive mid-stream.
+        if (parsed.error) {
+          appendError("Stream error: " + (parsed.error.message || "unknown"));
+          continue;
+        }
+
+        const delta = parsed.choices?.[0]?.delta;
+        if (delta) {
+          renderer.handleDelta(delta);
         }
       }
     }
   } catch (err) {
-    if (!fullContent) {
+    if (!renderer.getResponseText()) {
       assistantEl.remove();
       appendError("Error: " + err.message);
       setStreaming(false);
@@ -269,13 +450,10 @@ async function sendMessage() {
     }
   }
 
-  // Finalize: remove indicator, store message
-  indicator.remove();
-  if (fullContent) {
-    assistantEl.innerHTML = renderContent(fullContent);
-    messages.push({ role: "assistant", content: fullContent });
-  } else {
-    assistantEl.remove();
+  renderer.finalize();
+  const finalText = renderer.getResponseText();
+  if (finalText) {
+    messages.push({ role: "assistant", content: finalText });
   }
   setStreaming(false);
   inputEl.focus();
@@ -286,7 +464,6 @@ function autoResize() {
   inputEl.style.height = Math.min(inputEl.scrollHeight, 150) + "px";
 }
 
-// Event listeners
 document.getElementById("input-form").addEventListener("submit", function (e) {
   e.preventDefault();
   sendMessage();
