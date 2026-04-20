@@ -339,8 +339,11 @@ function createStreamRenderer(assistantEl) {
       if (delta.tool_calls && Array.isArray(delta.tool_calls)) {
         for (const tc of delta.tool_calls) {
           const idx = tc.index ?? 0;
-          // First delta for this index brings id+name.
-          if (tc.id && !toolCalls.has(idx)) {
+          // First delta for a new tool call brings id+name.
+          // Check by call_id, not just index — a second model
+          // iteration reuses index 0 with a different call_id.
+          const existing = toolCalls.get(idx);
+          if (tc.id && (!existing || existing.callId !== tc.id)) {
             const name = (tc.function && tc.function.name) || "tool";
             startToolCall(idx, tc.id, name);
             // Some chunks include initial args along with id+name.
