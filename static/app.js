@@ -6,13 +6,254 @@
 let messages = [];
 let streaming = false;
 
+// -- Settings panel state ---------------------------------------------------
+let agentInfo = null;
+let userTemperature = null;  // null = use server default
+let userMaxTokens = null;
+let userTopP = null;
+let userTopK = null;
+let userFreqPenalty = null;
+let userPresencePenalty = null;
+let userRepPenalty = null;
+let userReasoningEffort = null;
+let userApiBase = null;  // null = use default (direct vLLM)
+let userResponsesApi = false;
+
+async function loadAgentInfo() {
+  try {
+    const resp = await fetch("/v1/agent-info");
+    if (!resp.ok) return;
+    agentInfo = await resp.json();
+    populateSettings();
+  } catch (e) {
+    console.warn("Could not load agent info:", e);
+  }
+}
+
+function populateSettings() {
+  if (!agentInfo) return;
+
+  // Model name in header subtitle
+  const modelNameEl = document.getElementById("model-name");
+  if (modelNameEl && agentInfo.model) {
+    // Show just the model's short name, e.g. "gpt-oss-20b" from "openai/RedHatAI/gpt-oss-20b"
+    const parts = agentInfo.model.name.split("/");
+    modelNameEl.textContent = parts[parts.length - 1];
+  }
+
+  // Model info section
+  const modelInfoEl = document.getElementById("model-info");
+  if (modelInfoEl && agentInfo.model) {
+    modelInfoEl.innerHTML =
+      '<div class="info-row"><span class="info-label">Name</span><span class="info-value">' +
+      agentInfo.model.name.split("/").pop() + '</span></div>' +
+      '<div class="info-row"><span class="info-label">Default Temperature</span><span class="info-value">' +
+      agentInfo.model.temperature + '</span></div>' +
+      '<div class="info-row"><span class="info-label">Default Max Tokens</span><span class="info-value">' +
+      agentInfo.model.max_tokens + '</span></div>';
+  }
+
+  // Set parameter controls to defaults
+  const tempSlider = document.getElementById("param-temperature");
+  const tempValue = document.getElementById("temp-value");
+  const maxTokensInput = document.getElementById("param-max-tokens");
+  if (tempSlider && agentInfo.model) {
+    tempSlider.value = agentInfo.model.temperature;
+    tempValue.textContent = agentInfo.model.temperature;
+  }
+  if (maxTokensInput && agentInfo.model) {
+    maxTokensInput.value = agentInfo.model.max_tokens;
+  }
+
+  const topPSlider = document.getElementById("param-top-p");
+  const topPValue = document.getElementById("top-p-value");
+  if (topPSlider) { topPValue.textContent = ""; }
+
+  const freqSlider = document.getElementById("param-freq-penalty");
+  const freqValue = document.getElementById("freq-penalty-value");
+  if (freqSlider) { freqSlider.value = 0; freqValue.textContent = "0"; }
+
+  const presSlider = document.getElementById("param-presence-penalty");
+  const presValue = document.getElementById("presence-penalty-value");
+  if (presSlider) { presSlider.value = 0; presValue.textContent = "0"; }
+
+  const repSlider = document.getElementById("param-rep-penalty");
+  const repValue = document.getElementById("rep-penalty-value");
+  if (repSlider) { repSlider.value = 1; repValue.textContent = "1"; }
+
+  // Backend selector
+  const backendSelect = document.getElementById("param-backend");
+  const responsesGroup = document.getElementById("responses-api-group");
+  const responsesCheckbox = document.getElementById("param-responses-api");
+  if (backendSelect && agentInfo.backends) {
+    // Show/hide Responses API option based on LlamaStack availability
+    if (agentInfo.backends.llamastack && agentInfo.backends.llamastack.responses_api) {
+      responsesCheckbox.disabled = false;
+      responsesGroup.querySelector(".param-hint").textContent = "";
+    }
+  }
+
+  // System prompt
+  const promptEl = document.getElementById("system-prompt");
+  if (promptEl) {
+    promptEl.textContent = agentInfo.system_prompt || "(none)";
+  }
+
+  // Tools list
+  const toolsListEl = document.getElementById("tools-list");
+  const toolsCountEl = document.getElementById("tools-count");
+  if (toolsListEl && agentInfo.tools) {
+    toolsCountEl.textContent = "(" + agentInfo.tools.length + ")";
+    toolsListEl.innerHTML = "";
+    for (const tool of agentInfo.tools) {
+      const details = document.createElement("details");
+      details.className = "tool-info";
+      const summary = document.createElement("summary");
+      summary.textContent = tool.name;
+      details.appendChild(summary);
+      const desc = document.createElement("p");
+      desc.className = "tool-description";
+      desc.textContent = tool.description;
+      details.appendChild(desc);
+      if (tool.parameters && tool.parameters.properties) {
+        const params = document.createElement("div");
+        params.className = "tool-params";
+        const keys = Object.keys(tool.parameters.properties);
+        params.textContent = "Parameters: " + keys.join(", ");
+        details.appendChild(params);
+      }
+      toolsListEl.appendChild(details);
+    }
+  }
+}
+
+function setupSettings() {
+  const btn = document.getElementById("settings-btn");
+  const panel = document.getElementById("settings-panel");
+  const overlay = document.getElementById("settings-overlay");
+  const closeBtn = document.getElementById("settings-close");
+
+  function toggle() {
+    const open = panel.classList.toggle("open");
+    overlay.classList.toggle("open", open);
+  }
+
+  if (btn) btn.addEventListener("click", toggle);
+  if (closeBtn) closeBtn.addEventListener("click", toggle);
+  if (overlay) overlay.addEventListener("click", toggle);
+
+  // Temperature slider
+  const tempSlider = document.getElementById("param-temperature");
+  const tempValue = document.getElementById("temp-value");
+  if (tempSlider) {
+    tempSlider.addEventListener("input", function () {
+      tempValue.textContent = this.value;
+      userTemperature = parseFloat(this.value);
+    });
+  }
+
+  // Max tokens input
+  const maxTokensInput = document.getElementById("param-max-tokens");
+  if (maxTokensInput) {
+    maxTokensInput.addEventListener("change", function () {
+      userMaxTokens = parseInt(this.value, 10) || null;
+    });
+  }
+
+  // Top P slider
+  const topPSlider = document.getElementById("param-top-p");
+  const topPValue = document.getElementById("top-p-value");
+  if (topPSlider) {
+    topPSlider.addEventListener("input", function () {
+      topPValue.textContent = this.value;
+      userTopP = parseFloat(this.value) || null;
+    });
+  }
+
+  // Top K
+  const topKInput = document.getElementById("param-top-k");
+  if (topKInput) {
+    topKInput.addEventListener("change", function () {
+      const v = parseInt(this.value, 10);
+      userTopK = (v > 0) ? v : null;
+    });
+  }
+
+  // Frequency penalty
+  const freqSlider = document.getElementById("param-freq-penalty");
+  const freqValue = document.getElementById("freq-penalty-value");
+  if (freqSlider) {
+    freqSlider.addEventListener("input", function () {
+      freqValue.textContent = this.value;
+      userFreqPenalty = parseFloat(this.value) || null;
+    });
+  }
+
+  // Presence penalty
+  const presSlider = document.getElementById("param-presence-penalty");
+  const presValue = document.getElementById("presence-penalty-value");
+  if (presSlider) {
+    presSlider.addEventListener("input", function () {
+      presValue.textContent = this.value;
+      userPresencePenalty = parseFloat(this.value) || null;
+    });
+  }
+
+  // Repetition penalty
+  const repSlider = document.getElementById("param-rep-penalty");
+  const repValue = document.getElementById("rep-penalty-value");
+  if (repSlider) {
+    repSlider.addEventListener("input", function () {
+      repValue.textContent = this.value;
+      const v = parseFloat(this.value);
+      userRepPenalty = (v !== 1.0) ? v : null;
+    });
+  }
+
+  // Reasoning effort
+  const reasoningSelect = document.getElementById("param-reasoning");
+  if (reasoningSelect) {
+    reasoningSelect.addEventListener("change", function () {
+      userReasoningEffort = this.value || null;
+    });
+  }
+
+  // Backend selector
+  const backendSelect = document.getElementById("param-backend");
+  const responsesGroup = document.getElementById("responses-api-group");
+  if (backendSelect) {
+    backendSelect.addEventListener("change", function () {
+      const val = this.value;
+      if (val === "llamastack" && agentInfo && agentInfo.backends && agentInfo.backends.llamastack) {
+        userApiBase = agentInfo.backends.llamastack.api_base;
+        responsesGroup.style.display = "block";
+      } else {
+        userApiBase = null;
+        responsesGroup.style.display = "none";
+        // Uncheck Responses API when switching away from LlamaStack
+        const cb = document.getElementById("param-responses-api");
+        if (cb) { cb.checked = false; userResponsesApi = false; }
+      }
+    });
+  }
+
+  // Responses API checkbox
+  const responsesCheckbox = document.getElementById("param-responses-api");
+  if (responsesCheckbox) {
+    responsesCheckbox.addEventListener("change", function () {
+      userResponsesApi = this.checked;
+    });
+  }
+}
+
 const messagesEl = document.getElementById("messages");
 const inputEl = document.getElementById("input");
 const sendBtn = document.getElementById("send-btn");
 const chatEl = document.getElementById("chat");
 
 async function init() {
-  // Server proxies /v1/* to the backend — no config discovery needed
+  setupSettings();
+  loadAgentInfo();
 }
 
 function appendMessage(role, content) {
@@ -37,6 +278,39 @@ function scrollToBottom() {
 }
 
 function renderContent(text) {
+  // Phase 0: Render LaTeX blocks directly to HTML via KaTeX (if loaded).
+  // We do this before HTML escaping so the TeX source isn't mangled.
+  // The rendered HTML is stored as a placeholder and restored after
+  // all markdown processing.
+  var latexBlocks = [];
+  if (typeof katex !== "undefined") {
+    // Display math: \[...\]
+    text = text.replace(/\\\[([\s\S]*?)\\\]/g, function (_, tex) {
+      var idx = latexBlocks.length;
+      var html;
+      try {
+        html = katex.renderToString(tex.trim(), { displayMode: true, throwOnError: false });
+        html = '<div class="katex-display-block">' + html + '</div>';
+      } catch (e) {
+        html = "\\[" + tex + "\\]";
+      }
+      latexBlocks.push(html);
+      return "\x00LATEX" + idx + "\x00";
+    });
+    // Inline math: \(...\)
+    text = text.replace(/\\\(([\s\S]*?)\\\)/g, function (_, tex) {
+      var idx = latexBlocks.length;
+      var html;
+      try {
+        html = katex.renderToString(tex.trim(), { displayMode: false, throwOnError: false });
+      } catch (e) {
+        html = "\\(" + tex + "\\)";
+      }
+      latexBlocks.push(html);
+      return "\x00LATEX" + idx + "\x00";
+    });
+  }
+
   // Escape HTML first
   var safe = text
     .replace(/&/g, "&amp;")
@@ -157,6 +431,9 @@ function renderContent(text) {
   result = result.replace(/\x00INLINE(\d+)\x00/g, function (_, idx) {
     return inlineCode[parseInt(idx, 10)];
   });
+  result = result.replace(/\x00LATEX(\d+)\x00/g, function (_, idx) {
+    return latexBlocks[parseInt(idx, 10)];
+  });
 
   return result;
 }
@@ -192,6 +469,8 @@ function createStreamRenderer(assistantEl) {
   let responseEl = null;
   let responseText = "";
   let responseIndicator = null;
+  let streamMetrics = null;     // server-sent metrics object
+  let rawChunks = [];
 
   // Per-tool state: index -> { pillEl, nameEl, statusEl, argsEl, resultEl, args, name, callId }
   const toolCalls = new Map();
@@ -202,7 +481,7 @@ function createStreamRenderer(assistantEl) {
     thinkingPanel.className = "thinking-panel";
     // Collapsed by default per design.
     const summary = document.createElement("summary");
-    summary.textContent = "Thinking…";
+    summary.textContent = "Thinking\u2026";
     thinkingPanel.appendChild(summary);
     thinkingContent = document.createElement("div");
     thinkingContent.className = "thinking-content";
@@ -229,14 +508,14 @@ function createStreamRenderer(assistantEl) {
 
   function startToolCall(index, callId, name) {
     ensureToolCallsContainer();
-    const pill = document.createElement("div");
+    const pill = document.createElement("details");
     pill.className = "tool-call running";
 
-    const header = document.createElement("div");
+    const header = document.createElement("summary");
     header.className = "tool-header";
     const icon = document.createElement("span");
     icon.className = "tool-icon";
-    icon.textContent = "⚙";
+    icon.textContent = "\u2699";
     const nameEl = document.createElement("span");
     nameEl.className = "tool-name";
     nameEl.textContent = name;
@@ -313,7 +592,11 @@ function createStreamRenderer(assistantEl) {
     scrollToBottom();
   }
 
-  function finalize() {
+  function setMetrics(metrics, usage) {
+    streamMetrics = { ...metrics, usage };
+  }
+
+  function finalize(clientTtft) {
     // Remove the streaming cursor.
     if (responseIndicator && responseIndicator.parentNode) {
       responseIndicator.parentNode.removeChild(responseIndicator);
@@ -327,6 +610,51 @@ function createStreamRenderer(assistantEl) {
     if (!responseText.trim() && !toolCalls.size && !thinkingPanel) {
       assistantEl.textContent = "(no response)";
     }
+
+    // Raw API response button -- always shown
+    const rawBtn = document.createElement("button");
+    rawBtn.className = "raw-response-btn";
+    rawBtn.textContent = "View Raw Response";
+    rawBtn.title = "View full API response chunks";
+    rawBtn.addEventListener("click", function () {
+      showRawResponse(rawChunks);
+    });
+    assistantEl.appendChild(rawBtn);
+
+    // Render metrics bar if we have data.
+    const m = streamMetrics;
+    if (!m) return;
+
+    const bar = document.createElement("div");
+    bar.className = "stream-metrics";
+
+    const items = [];
+    const ttft = m.time_to_first_content ?? clientTtft;
+    if (ttft != null) items.push(["TTFT", ttft.toFixed(1) + "s"]);
+    if (m.time_to_first_reasoning != null) items.push(["Thinking", m.time_to_first_reasoning.toFixed(1) + "s"]);
+    if (m.total_time != null) items.push(["Total", m.total_time.toFixed(1) + "s"]);
+    if (m.usage && m.usage.total_tokens != null) items.push(["Tokens", m.usage.total_tokens.toLocaleString()]);
+    if (m.model_calls != null) items.push(["Model calls", m.model_calls]);
+    if (m.tool_calls != null) items.push(["Tool calls", m.tool_calls]);
+    if (m.inter_token_latencies && m.inter_token_latencies.length > 0) {
+      const sum = m.inter_token_latencies.reduce(function (a, b) { return a + b; }, 0);
+      const avg = sum / m.inter_token_latencies.length;
+      items.push(["Avg ITL", (avg * 1000).toFixed(0) + "ms"]);
+    }
+
+    for (var i = 0; i < items.length; i++) {
+      var span = document.createElement("span");
+      span.className = "metric";
+      span.innerHTML = '<span class="metric-label">' + items[i][0] + '</span>'
+        + '<span class="metric-value">' + items[i][1] + '</span>';
+      bar.appendChild(span);
+    }
+
+    assistantEl.appendChild(bar);
+  }
+
+  function pushRawChunk(chunk) {
+    rawChunks.push(chunk);
   }
 
   return {
@@ -363,8 +691,33 @@ function createStreamRenderer(assistantEl) {
       // announcement we can safely ignore.
     },
     finalize,
+    setMetrics,
     getResponseText: () => responseText,
+    pushRawChunk,
+    getRawChunks: () => rawChunks,
   };
+}
+
+function showRawResponse(chunks) {
+  let modal = document.getElementById("raw-response-modal");
+  if (!modal) {
+    modal = document.createElement("div");
+    modal.id = "raw-response-modal";
+    modal.className = "raw-modal";
+    modal.innerHTML = '<div class="raw-modal-content">' +
+      '<div class="raw-modal-header"><h3>Raw API Response</h3><button class="raw-modal-close">&times;</button></div>' +
+      '<pre class="raw-modal-body"></pre></div>';
+    document.body.appendChild(modal);
+    modal.querySelector(".raw-modal-close").addEventListener("click", function () {
+      modal.classList.remove("open");
+    });
+    modal.addEventListener("click", function (e) {
+      if (e.target === modal) modal.classList.remove("open");
+    });
+  }
+  const body = modal.querySelector(".raw-modal-body");
+  body.textContent = JSON.stringify(chunks, null, 2);
+  modal.classList.add("open");
 }
 
 async function sendMessage() {
@@ -383,17 +736,28 @@ async function sendMessage() {
   scrollToBottom();
 
   const renderer = createStreamRenderer(assistantEl);
+  const requestStart = performance.now();
+  let clientTtft = null;
 
   setStreaming(true);
 
   try {
+    const reqBody = { messages: messages, stream: true };
+    if (userTemperature !== null) reqBody.temperature = userTemperature;
+    if (userMaxTokens !== null) reqBody.max_tokens = userMaxTokens;
+    if (userTopP !== null) reqBody.top_p = userTopP;
+    if (userTopK !== null) reqBody.top_k = userTopK;
+    if (userFreqPenalty !== null) reqBody.frequency_penalty = userFreqPenalty;
+    if (userPresencePenalty !== null) reqBody.presence_penalty = userPresencePenalty;
+    if (userRepPenalty !== null) reqBody.repetition_penalty = userRepPenalty;
+    if (userReasoningEffort !== null) reqBody.reasoning_effort = userReasoningEffort;
+    if (userApiBase !== null) reqBody.api_base = userApiBase;
+    if (userResponsesApi) reqBody.use_responses_api = true;
+
     const resp = await fetch("/v1/chat/completions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        messages: messages,
-        stream: true,
-      }),
+      body: JSON.stringify(reqBody),
     });
 
     if (!resp.ok) {
@@ -429,14 +793,26 @@ async function sendMessage() {
           continue; // skip malformed
         }
 
+        renderer.pushRawChunk(parsed);
+
         // Surface backend errors that arrive mid-stream.
         if (parsed.error) {
           appendError("Stream error: " + (parsed.error.message || "unknown"));
           continue;
         }
 
+        // Detect metrics chunk (empty choices array + stream_metrics).
+        if (parsed.stream_metrics) {
+          renderer.setMetrics(parsed.stream_metrics, parsed.usage);
+          continue;
+        }
+
         const delta = parsed.choices?.[0]?.delta;
         if (delta) {
+          // Record client-side TTFT on first content delta.
+          if (delta.content && clientTtft === null) {
+            clientTtft = (performance.now() - requestStart) / 1000;
+          }
           renderer.handleDelta(delta);
         }
       }
@@ -450,7 +826,7 @@ async function sendMessage() {
     }
   }
 
-  renderer.finalize();
+  renderer.finalize(clientTtft);
   const finalText = renderer.getResponseText();
   if (finalText) {
     messages.push({ role: "assistant", content: finalText });
