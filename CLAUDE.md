@@ -21,16 +21,17 @@ API_URL=https://my-agent.apps.cluster.example.com make run
 
 The project has two layers:
 
-**Go server** (`cmd/server/main.go`) -- a ~70-line HTTP server that:
+**Go server** (`cmd/server/main.go`) -- a ~90-line HTTP server that:
 - Embeds static files via Go's `embed` package (through `static/embed.go`)
+- Reverse-proxies `/v1/*` requests to the backend, eliminating CORS issues
 - Serves `GET /api/config` returning the API_URL as JSON
 - Serves `GET /healthz` for container probes
 - Handles graceful shutdown on SIGTERM
 
 **Static frontend** (`static/`) -- vanilla HTML/CSS/JS, no build step:
-- Fetches `/api/config` on load to discover the backend
-- Sends messages to `${apiUrl}/v1/chat/completions` with `stream: true`
-- Parses SSE responses for typewriter streaming effect
+- Fetches `/api/config` on load; fetches `/v1/agent-info` to populate a settings panel with model info, parameters, tools, and system prompt
+- Posts to the local `/v1/chat/completions` proxy with `stream: true`
+- Parses SSE responses with streaming display, reasoning/thinking content panel, tool call visualization, and stream metrics (tokens/s, inter-token latency)
 - Maintains conversation history in memory
 
 ## Configuration
@@ -61,7 +62,7 @@ make deploy PROJECT=my-project
 
 ## How the UI Discovers the API
 
-The frontend never hardcodes an API URL. On page load, `app.js` calls `GET /api/config`, which returns `{"apiUrl": "..."}` sourced from the `API_URL` environment variable. This keeps the static files truly static -- the same HTML/CSS/JS works against any backend. The API URL is configured at deploy time via the ConfigMap.
+The frontend never hardcodes an API URL. On page load, `app.js` calls `GET /api/config`, which returns `{"apiUrl": "..."}` sourced from the `API_URL` environment variable. However, all actual API traffic flows through the server's `/v1/` reverse proxy -- the browser posts to `/v1/chat/completions` on its own origin, and the server forwards the request to the configured backend. This eliminates CORS issues and keeps the static files truly static. The API URL is configured at deploy time via the ConfigMap.
 
 ## Sentinel Strings
 

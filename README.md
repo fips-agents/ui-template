@@ -4,6 +4,32 @@ A minimal chat UI that connects to any OpenAI-compatible API endpoint (vLLM, an 
 
 <!-- TODO: Add screenshot -->
 
+## Features
+
+**Settings and model control** -- Temperature, max tokens, top-p/top-k, frequency/presence/repetition penalty, and reasoning effort. Backend selection for vLLM vs LlamaStack, with a Responses API toggle.
+
+**Agent introspection** -- If the backend serves `GET /v1/agent-info`, the settings panel populates with the model's system prompt and available tools. Tools are expandable to show parameter details. Gracefully degrades when the endpoint is absent.
+
+**Reasoning and tool calls** -- Collapsible panel for thinking/reasoning content from models that support it. Tool call visualization with state tracking (running, done, error).
+
+**Stream metrics and debugging** -- Token counts, average inter-token latency, and time-to-first-token. A raw API response viewer for inspecting the full SSE payload.
+
+## Architecture
+
+The Go server embeds the static frontend into a single binary via `go:embed`. At runtime it does three things:
+
+1. Serves the static files (HTML/CSS/JS) at the root.
+2. Runs a reverse proxy at `/v1/` that forwards all requests to the backend API configured via `API_URL`. This eliminates CORS issues -- the browser only talks to the Go server.
+3. Exposes `GET /api/config` (returns the raw API URL as JSON) and `GET /healthz` for container probes.
+
+The frontend discovers the backend via `/api/config` on page load, but all API traffic flows through the `/v1/` reverse proxy on the same origin.
+
+## Backend Contract
+
+The backend must be OpenAI chat-completions compatible (`POST /v1/chat/completions` with SSE streaming).
+
+Optionally, the backend can serve `GET /v1/agent-info` to populate the settings panel with model info, system prompt, available tools, and backend configuration. If this endpoint is not available, the settings panel shows only the client-side controls.
+
 ## Quick Start
 
 ```bash
