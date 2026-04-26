@@ -74,6 +74,7 @@ This is a template repository. During scaffolding, `"ui-template"` is replaced w
 - `Makefile` PROJECT/IMAGE_NAME defaults
 - `chart/values.yaml` image repository
 - `chart/templates/_helpers.tpl` template names
+- `llms.txt` H1 title and GitHub URLs
 
 ## Testing
 
