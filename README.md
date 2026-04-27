@@ -14,6 +14,8 @@ A minimal chat UI that connects to any OpenAI-compatible API endpoint (vLLM, an 
 
 **Stream metrics and debugging** -- Token counts, average inter-token latency, and time-to-first-token. A raw API response viewer for inspecting the full SSE payload.
 
+**Inline feedback** -- Thumbs-up/-down on completed assistant messages, with an inline note next to the icon after a thumbs-down submission. The note is editable: clicking it reopens the modal so you can change the category, edit the comment, or flip the rating. Edits PATCH the existing record rather than creating duplicates. Visibility is configurable via the `data-feedback-visibility` attribute on `<body>` in `index.html` -- `hover` (default), `always` (icons always visible, useful for internal/eval/QA tooling), or `off`. Controls are hidden when no `trace_id` is available, so older backends silently degrade.
+
 ## Architecture
 
 The Go server embeds the static frontend into a single binary via `go:embed`. At runtime it does three things:
@@ -29,6 +31,8 @@ The frontend discovers the backend via `/api/config` on page load, but all API t
 The backend must be OpenAI chat-completions compatible (`POST /v1/chat/completions` with SSE streaming).
 
 Optionally, the backend can serve `GET /v1/agent-info` to populate the settings panel with model info, system prompt, available tools, and backend configuration. If this endpoint is not available, the settings panel shows only the client-side controls.
+
+For inline feedback to work, the backend must surface a `trace_id` (either in an `X-Trace-Id` response header or as a top-level `trace_id` field on the final SSE usage chunk) and accept `POST /v1/feedback` with `{trace_id, rating, comment?}`. Backends without these features simply hide the feedback icons; everything else continues to work.
 
 ## Quick Start
 

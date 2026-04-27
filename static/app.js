@@ -471,6 +471,7 @@ function createStreamRenderer(assistantEl) {
   let responseIndicator = null;
   let streamMetrics = null;     // server-sent metrics object
   let rawChunks = [];
+  let traceId = null;           // populated from usage chunk or response header
 
   // Per-tool state: index -> { pillEl, nameEl, statusEl, argsEl, resultEl, args, name, callId }
   const toolCalls = new Map();
@@ -651,13 +652,23 @@ function createStreamRenderer(assistantEl) {
     }
 
     assistantEl.appendChild(bar);
+
+    // Feedback controls (only when we have a trace_id to attach to)
+    if (traceId) {
+      assistantEl.appendChild(createFeedbackControls(traceId));
+    }
   }
 
   function pushRawChunk(chunk) {
     rawChunks.push(chunk);
   }
 
+  function setTraceId(id) {
+    if (id) traceId = id;
+  }
+
   return {
+    setTraceId,
     handleDelta(delta) {
       // Reasoning ("thinking") phase
       if (delta.reasoning_content) {
@@ -699,6 +710,296 @@ function createStreamRenderer(assistantEl) {
     pushRawChunk,
     getRawChunks: () => rawChunks,
   };
+}
+
+// -- Feedback controls -----------------------------------------------------
+// Hover-revealed thumbs-up/-down on completed assistant messages. Thumbs-up
+// records a positive rating immediately; thumbs-down opens a modal so the
+// user can pick a category and (optionally) leave a free-text comment.
+//
+// State per message is local: once a rating is submitted, both icons stay
+// visible but the chosen one is filled and further clicks are ignored.
+
+const FEEDBACK_CATEGORIES = [
+  "Inaccurate",
+  "Not helpful",
+  "Harmful",
+  "Too long",
+  "Other",
+];
+
+function createFeedbackControls(traceId) {
+  const wrap = document.createElement("div");
+  wrap.className = "feedback-controls";
+  wrap.dataset.state = "idle"; // idle | submitted
+
+  const upBtn = document.createElement("button");
+  upBtn.type = "button";
+  upBtn.className = "feedback-btn feedback-up";
+  upBtn.title = "Good response";
+  upBtn.setAttribute("aria-label", "Thumbs up");
+  upBtn.innerHTML = THUMB_UP_SVG;
+
+  const downBtn = document.createElement("button");
+  downBtn.type = "button";
+  downBtn.className = "feedback-btn feedback-down";
+  downBtn.title = "Bad response";
+  downBtn.setAttribute("aria-label", "Thumbs down");
+  downBtn.innerHTML = THUMB_DOWN_SVG;
+
+  // Inline note rendered next to the thumbs after a thumbs-down submission.
+  // Click it to re-open the modal and edit the existing record.
+  const noteEl = document.createElement("button");
+  noteEl.type = "button";
+  noteEl.className = "feedback-note";
+  noteEl.hidden = true;
+  noteEl.title = "Edit feedback";
+
+  // Per-message state. feedbackId is null until the first POST returns,
+  // then every subsequent edit PATCHes that record.
+  const state = {
+    feedbackId: null,
+    rating: null,        // 1 | -1 | null
+    category: null,
+    comment: null,
+  };
+
+  function persistChange(rating, category, comment) {
+    const previous = { ...state };
+    optimisticApply(wrap, noteEl, state, rating, category, comment);
+    sendFeedbackUpdate(traceId, state, rating, category, comment).catch(function (err) {
+      // Roll back on failure.
+      Object.assign(state, previous);
+      optimisticApply(wrap, noteEl, state, previous.rating, previous.category, previous.comment);
+      appendError("Could not save feedback: " + err.message);
+    });
+  }
+
+  upBtn.addEventListener("click", function () {
+    if (state.rating === 1) return; // already up; nothing to do
+    persistChange(1, null, null);
+  });
+
+  downBtn.addEventListener("click", function () {
+    showFeedbackModal({
+      category: state.category,
+      comment: state.comment,
+    }, function (category, comment) {
+      persistChange(-1, category, comment);
+    });
+  });
+
+  noteEl.addEventListener("click", function () {
+    showFeedbackModal({
+      category: state.category,
+      comment: state.comment,
+    }, function (category, comment) {
+      persistChange(-1, category, comment);
+    });
+  });
+
+  wrap.appendChild(upBtn);
+  wrap.appendChild(downBtn);
+  wrap.appendChild(noteEl);
+  return wrap;
+}
+
+// Update the local state object and sync the DOM in one place.
+function optimisticApply(wrap, noteEl, state, rating, category, comment) {
+  state.rating = rating;
+  state.category = category;
+  state.comment = comment;
+  if (rating === 1) {
+    wrap.dataset.state = "submitted";
+    wrap.dataset.choice = "up";
+    noteEl.hidden = true;
+    noteEl.textContent = "";
+  } else if (rating === -1) {
+    wrap.dataset.state = "submitted";
+    wrap.dataset.choice = "down";
+    noteEl.textContent = formatNote(category, comment);
+    noteEl.hidden = false;
+  } else {
+    wrap.dataset.state = "idle";
+    delete wrap.dataset.choice;
+    noteEl.hidden = true;
+    noteEl.textContent = "";
+  }
+}
+
+function formatNote(category, comment) {
+  const cat = category ? "[" + category + "]" : "";
+  const txt = comment ? " " + comment : "";
+  return (cat + txt).trim() || "(no details)";
+}
+
+// First call POSTs and stores the new feedback_id; later calls PATCH.
+async function sendFeedbackUpdate(traceId, state, rating, category, comment) {
+  if (state.feedbackId) {
+    const updated = await patchFeedback(state.feedbackId, rating, category, comment);
+    return updated;
+  }
+  const created = await submitFeedback(traceId, rating, category, comment);
+  state.feedbackId = created.feedback_id;
+  return created;
+}
+
+// Hand-aligned 16×16 paths, in the same outline style as the rest of
+// the UI's icons. Filled state is applied via CSS (`fill: currentColor`)
+// so the same path serves both states.
+const THUMB_UP_SVG =
+  '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"'
+  + ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+  + '<path d="M7 10v12"></path>'
+  + '<path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H7V10l4.06-9a1.93 1.93 0 0 1 1.78 1.04 5.93 5.93 0 0 1 .98 4.5z"></path>'
+  + '</svg>';
+
+const THUMB_DOWN_SVG =
+  '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"'
+  + ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+  + '<path d="M17 14V2"></path>'
+  + '<path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H17v12l-4.06 9a1.93 1.93 0 0 1-1.78-1.04 5.93 5.93 0 0 1-.98-4.5z"></path>'
+  + '</svg>';
+
+function markSubmitted(wrap, which) {
+  wrap.dataset.state = "submitted";
+  wrap.dataset.choice = which;
+}
+
+function restorePrevious(wrap, previous) {
+  if (previous) {
+    wrap.dataset.state = "submitted";
+    wrap.dataset.choice = previous;
+  } else {
+    wrap.dataset.state = "idle";
+    delete wrap.dataset.choice;
+  }
+}
+
+// Encode the optional UI category as a bracketed prefix on `comment` so
+// the backend's existing schema captures it without a first-class column.
+function encodeComment(category, comment) {
+  if (category && comment) return "[" + category + "] " + comment;
+  if (category) return "[" + category + "]";
+  return comment || null;
+}
+
+async function submitFeedback(traceId, rating, category, comment) {
+  const body = { trace_id: traceId, rating: rating };
+  const c = encodeComment(category, comment);
+  if (c !== null) body.comment = c;
+
+  const resp = await fetch("/v1/feedback", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!resp.ok) {
+    const text = await resp.text().catch(function () { return ""; });
+    throw new Error("HTTP " + resp.status + (text ? " — " + text : ""));
+  }
+  return resp.json();
+}
+
+// PATCH an existing record. The backend treats `null` fields as
+// "leave unchanged"; we always send rating + comment because the user
+// may flip either or both in a single edit.
+async function patchFeedback(feedbackId, rating, category, comment) {
+  const body = {
+    rating: rating,
+    // Send "" rather than null when there's no comment so the field
+    // gets explicitly cleared on the backend (e.g. flipping from down
+    // back to up — though our UI currently doesn't expose that flow).
+    comment: encodeComment(category, comment) || "",
+  };
+  const resp = await fetch("/v1/feedback/" + encodeURIComponent(feedbackId), {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!resp.ok) {
+    const text = await resp.text().catch(function () { return ""; });
+    throw new Error("HTTP " + resp.status + (text ? " — " + text : ""));
+  }
+  return resp.json();
+}
+
+function showFeedbackModal(prefill, onSubmit) {
+  // Backwards-compat: allow `showFeedbackModal(onSubmit)` calls.
+  if (typeof prefill === "function") {
+    onSubmit = prefill;
+    prefill = {};
+  }
+  prefill = prefill || {};
+
+  let modal = document.getElementById("feedback-modal");
+  if (!modal) {
+    modal = document.createElement("div");
+    modal.id = "feedback-modal";
+    modal.className = "feedback-modal";
+    const optionsHtml = FEEDBACK_CATEGORIES.map(function (c) {
+      return '<label class="feedback-option">'
+        + '<input type="radio" name="feedback-category" value="' + c + '"> ' + c
+        + '</label>';
+    }).join("");
+    modal.innerHTML = '<div class="feedback-modal-content">'
+      + '<div class="feedback-modal-header">'
+      +   '<h3>What was wrong?</h3>'
+      +   '<button class="feedback-modal-close" aria-label="Close">&times;</button>'
+      + '</div>'
+      + '<div class="feedback-modal-body">'
+      +   '<div class="feedback-options">' + optionsHtml + '</div>'
+      +   '<textarea class="feedback-comment" placeholder="Optional details..." rows="3"></textarea>'
+      + '</div>'
+      + '<div class="feedback-modal-footer">'
+      +   '<button class="feedback-cancel">Cancel</button>'
+      +   '<button class="feedback-submit">Submit</button>'
+      + '</div>'
+      + '</div>';
+    document.body.appendChild(modal);
+    modal.addEventListener("click", function (e) {
+      if (e.target === modal) closeFeedbackModal();
+    });
+    modal.querySelector(".feedback-modal-close")
+      .addEventListener("click", closeFeedbackModal);
+    modal.querySelector(".feedback-cancel")
+      .addEventListener("click", closeFeedbackModal);
+  }
+
+  // Pre-populate with the caller's last submission (or defaults).
+  const radios = modal.querySelectorAll('input[name="feedback-category"]');
+  const wantCategory = prefill.category || FEEDBACK_CATEGORIES[0];
+  let matched = false;
+  radios.forEach(function (r) {
+    if (r.value === wantCategory) {
+      r.checked = true;
+      matched = true;
+    } else {
+      r.checked = false;
+    }
+  });
+  if (!matched && radios.length) radios[0].checked = true;
+  modal.querySelector(".feedback-comment").value = prefill.comment || "";
+
+  // Re-bind submit (closure over the new callback).
+  const submitBtn = modal.querySelector(".feedback-submit");
+  const newSubmit = submitBtn.cloneNode(true);
+  submitBtn.parentNode.replaceChild(newSubmit, submitBtn);
+  newSubmit.addEventListener("click", function () {
+    const checked = modal.querySelector('input[name="feedback-category"]:checked');
+    const category = checked ? checked.value : null;
+    const comment = modal.querySelector(".feedback-comment").value.trim() || null;
+    closeFeedbackModal();
+    onSubmit(category, comment);
+  });
+
+  modal.classList.add("open");
+  modal.querySelector(".feedback-comment").focus();
+}
+
+function closeFeedbackModal() {
+  const modal = document.getElementById("feedback-modal");
+  if (modal) modal.classList.remove("open");
 }
 
 function showRawResponse(chunks) {
@@ -767,6 +1068,12 @@ async function sendMessage() {
       throw new Error("API returned " + resp.status + ": " + resp.statusText);
     }
 
+    // Capture trace_id from the response header so feedback controls
+    // can attach to a real trace. (The same value is also echoed on
+    // the final usage chunk for transports that hide headers.)
+    const headerTraceId = resp.headers.get("X-Trace-Id");
+    if (headerTraceId) renderer.setTraceId(headerTraceId);
+
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
@@ -807,6 +1114,7 @@ async function sendMessage() {
         // Detect metrics chunk (empty choices array + stream_metrics).
         if (parsed.stream_metrics) {
           renderer.setMetrics(parsed.stream_metrics, parsed.usage);
+          if (parsed.trace_id) renderer.setTraceId(parsed.trace_id);
           continue;
         }
 

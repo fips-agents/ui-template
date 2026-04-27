@@ -9,7 +9,19 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.21/dist/katex.min.css">
   <script src="https://cdn.jsdelivr.net/npm/katex@0.16.21/dist/katex.min.js"></script>
 </head>
-<body>
+<!--
+  data-feedback-visibility controls when the thumbs-up/down icons appear on
+  assistant messages.  Build-time config — change the attribute below before
+  rebuilding the binary.
+
+    hover    icons fade in on message hover (default; consumer-style polish)
+    always   icons always visible at low opacity, full opacity on hover
+             (good for internal/eval/QA tools where the affordance should be
+             obvious)
+    off      hide the icons entirely (turn the feature off without rebuilding
+             the agent or removing the gateway routes)
+-->
+<body data-feedback-visibility="hover">
   <header>
     <div class="header-row">
       <div>
