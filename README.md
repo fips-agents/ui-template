@@ -14,7 +14,7 @@ A minimal chat UI that connects to any OpenAI-compatible API endpoint (vLLM, an 
 
 **Stream metrics and debugging** -- Token counts, average inter-token latency, and time-to-first-token. A raw API response viewer for inspecting the full SSE payload.
 
-**Inline feedback** -- Hover-revealed thumbs-up/-down on completed assistant messages. Thumbs-down opens a modal for category (Inaccurate / Not helpful / Harmful / Too long / Other) plus an optional comment, then POSTs to the backend's `/v1/feedback` endpoint using the trace ID surfaced in the `X-Trace-Id` response header. Controls are hidden when no `trace_id` is available, so older backends silently degrade.
+**Inline feedback** -- Thumbs-up/-down on completed assistant messages, with an inline note next to the icon after a thumbs-down submission. The note is editable: clicking it reopens the modal so you can change the category, edit the comment, or flip the rating. Edits PATCH the existing record rather than creating duplicates. Visibility is configurable via the `data-feedback-visibility` attribute on `<body>` in `index.html` -- `hover` (default), `always` (icons always visible, useful for internal/eval/QA tooling), or `off`. Controls are hidden when no `trace_id` is available, so older backends silently degrade.
 
 ## Architecture
 

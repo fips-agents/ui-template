@@ -825,53 +825,113 @@ footer {
 
 .feedback-controls {
   display: flex;
-  gap: 6px;
-  margin-top: 6px;
-  opacity: 0;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 8px;
   transition: opacity 0.15s;
 }
 
-.message.assistant:hover .feedback-controls,
-.feedback-controls[data-state="submitted"] {
+/* Visibility is controlled by a body[data-feedback-visibility] attribute set
+   in index.html.  Three modes:
+     hover  — fade in on message hover (default)
+     always — always visible, slightly muted until hovered
+     off    — feature hidden entirely
+*/
+
+body[data-feedback-visibility="hover"] .feedback-controls {
+  opacity: 0;
+}
+body[data-feedback-visibility="hover"] .message.assistant:hover .feedback-controls,
+body[data-feedback-visibility="hover"] .feedback-controls[data-state="submitted"] {
   opacity: 1;
+}
+
+body[data-feedback-visibility="always"] .feedback-controls {
+  opacity: 0.55;
+}
+body[data-feedback-visibility="always"] .message.assistant:hover .feedback-controls,
+body[data-feedback-visibility="always"] .feedback-controls[data-state="submitted"] {
+  opacity: 1;
+}
+
+body[data-feedback-visibility="off"] .feedback-controls {
+  display: none;
 }
 
 .feedback-btn {
   background: none;
   border: 1px solid transparent;
-  border-radius: 4px;
-  padding: 3px 5px;
+  border-radius: 6px;
+  padding: 4px;
+  width: 28px;
+  height: 28px;
   cursor: pointer;
   color: var(--color-text-dim);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  transition: color 0.15s, background 0.15s, border-color 0.15s;
+  flex: 0 0 auto;
+  transition: color 0.12s, background 0.12s, border-color 0.12s;
+}
+
+.feedback-btn svg {
+  display: block;
+  width: 16px;
+  height: 16px;
 }
 
 .feedback-btn:hover {
   color: var(--color-text);
-  background: rgba(0, 0, 0, 0.05);
+  background: rgba(0, 0, 0, 0.06);
 }
 
-.feedback-controls[data-state="submitted"] .feedback-btn {
-  cursor: default;
-}
-
+/* Filled state: matching color background and a coloured stroke + fill so
+   the rated icon is unambiguous. The other icon stays selectable in
+   muted form so the user can flip the rating with a single click. */
 .feedback-controls[data-choice="up"] .feedback-up {
-  color: #16a34a;
+  color: #15803d;
+  background: rgba(22, 163, 74, 0.12);
+  border-color: rgba(22, 163, 74, 0.35);
 }
-
 .feedback-controls[data-choice="up"] .feedback-up svg {
   fill: currentColor;
 }
 
 .feedback-controls[data-choice="down"] .feedback-down {
-  color: #dc2626;
+  color: #b91c1c;
+  background: rgba(220, 38, 38, 0.12);
+  border-color: rgba(220, 38, 38, 0.35);
 }
-
 .feedback-controls[data-choice="down"] .feedback-down svg {
   fill: currentColor;
+}
+
+/* Inline note — shown next to thumbs-down after a negative rating is
+   submitted.  Click to reopen the modal and edit the existing record. */
+.feedback-note {
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.3;
+  color: var(--color-text);
+  background: rgba(0, 0, 0, 0.04);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: 3px 8px;
+  margin-left: 4px;
+  cursor: pointer;
+  max-width: 360px;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.feedback-note:hover {
+  background: rgba(0, 0, 0, 0.08);
+  border-color: var(--color-text-dim);
 }
 
 /* -- Feedback modal -------------------------------------------------------- */

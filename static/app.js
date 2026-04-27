@@ -734,75 +734,160 @@ function createFeedbackControls(traceId) {
   wrap.dataset.state = "idle"; // idle | submitted
 
   const upBtn = document.createElement("button");
+  upBtn.type = "button";
   upBtn.className = "feedback-btn feedback-up";
   upBtn.title = "Good response";
   upBtn.setAttribute("aria-label", "Thumbs up");
-  upBtn.innerHTML = thumbSvg(true);
+  upBtn.innerHTML = THUMB_UP_SVG;
 
   const downBtn = document.createElement("button");
+  downBtn.type = "button";
   downBtn.className = "feedback-btn feedback-down";
   downBtn.title = "Bad response";
   downBtn.setAttribute("aria-label", "Thumbs down");
-  downBtn.innerHTML = thumbSvg(false);
+  downBtn.innerHTML = THUMB_DOWN_SVG;
+
+  // Inline note rendered next to the thumbs after a thumbs-down submission.
+  // Click it to re-open the modal and edit the existing record.
+  const noteEl = document.createElement("button");
+  noteEl.type = "button";
+  noteEl.className = "feedback-note";
+  noteEl.hidden = true;
+  noteEl.title = "Edit feedback";
+
+  // Per-message state. feedbackId is null until the first POST returns,
+  // then every subsequent edit PATCHes that record.
+  const state = {
+    feedbackId: null,
+    rating: null,        // 1 | -1 | null
+    category: null,
+    comment: null,
+  };
+
+  function persistChange(rating, category, comment) {
+    const previous = { ...state };
+    optimisticApply(wrap, noteEl, state, rating, category, comment);
+    sendFeedbackUpdate(traceId, state, rating, category, comment).catch(function (err) {
+      // Roll back on failure.
+      Object.assign(state, previous);
+      optimisticApply(wrap, noteEl, state, previous.rating, previous.category, previous.comment);
+      appendError("Could not save feedback: " + err.message);
+    });
+  }
 
   upBtn.addEventListener("click", function () {
-    if (wrap.dataset.state === "submitted") return;
-    markSubmitted(wrap, "up");
-    submitFeedback(traceId, 1, null, null).catch(function (err) {
-      revertSubmitted(wrap);
-      appendError("Could not submit feedback: " + err.message);
-    });
+    if (state.rating === 1) return; // already up; nothing to do
+    persistChange(1, null, null);
   });
 
   downBtn.addEventListener("click", function () {
-    if (wrap.dataset.state === "submitted") return;
-    showFeedbackModal(function (category, comment) {
-      markSubmitted(wrap, "down");
-      submitFeedback(traceId, -1, category, comment).catch(function (err) {
-        revertSubmitted(wrap);
-        appendError("Could not submit feedback: " + err.message);
-      });
+    showFeedbackModal({
+      category: state.category,
+      comment: state.comment,
+    }, function (category, comment) {
+      persistChange(-1, category, comment);
+    });
+  });
+
+  noteEl.addEventListener("click", function () {
+    showFeedbackModal({
+      category: state.category,
+      comment: state.comment,
+    }, function (category, comment) {
+      persistChange(-1, category, comment);
     });
   });
 
   wrap.appendChild(upBtn);
   wrap.appendChild(downBtn);
+  wrap.appendChild(noteEl);
   return wrap;
 }
 
-function thumbSvg(up) {
-  // Outline thumb; click handler swaps in the filled variant via CSS.
-  const transform = up ? "" : ' transform="scale(1,-1) translate(0,-24)"';
-  return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"'
-    + ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round"' + transform + '>'
-    + '<path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3z"></path>'
-    + '<line x1="7" y1="11" x2="7" y2="22"></line>'
-    + '</svg>';
+// Update the local state object and sync the DOM in one place.
+function optimisticApply(wrap, noteEl, state, rating, category, comment) {
+  state.rating = rating;
+  state.category = category;
+  state.comment = comment;
+  if (rating === 1) {
+    wrap.dataset.state = "submitted";
+    wrap.dataset.choice = "up";
+    noteEl.hidden = true;
+    noteEl.textContent = "";
+  } else if (rating === -1) {
+    wrap.dataset.state = "submitted";
+    wrap.dataset.choice = "down";
+    noteEl.textContent = formatNote(category, comment);
+    noteEl.hidden = false;
+  } else {
+    wrap.dataset.state = "idle";
+    delete wrap.dataset.choice;
+    noteEl.hidden = true;
+    noteEl.textContent = "";
+  }
 }
+
+function formatNote(category, comment) {
+  const cat = category ? "[" + category + "]" : "";
+  const txt = comment ? " " + comment : "";
+  return (cat + txt).trim() || "(no details)";
+}
+
+// First call POSTs and stores the new feedback_id; later calls PATCH.
+async function sendFeedbackUpdate(traceId, state, rating, category, comment) {
+  if (state.feedbackId) {
+    const updated = await patchFeedback(state.feedbackId, rating, category, comment);
+    return updated;
+  }
+  const created = await submitFeedback(traceId, rating, category, comment);
+  state.feedbackId = created.feedback_id;
+  return created;
+}
+
+// Hand-aligned 16×16 paths, in the same outline style as the rest of
+// the UI's icons. Filled state is applied via CSS (`fill: currentColor`)
+// so the same path serves both states.
+const THUMB_UP_SVG =
+  '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"'
+  + ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+  + '<path d="M7 10v12"></path>'
+  + '<path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H7V10l4.06-9a1.93 1.93 0 0 1 1.78 1.04 5.93 5.93 0 0 1 .98 4.5z"></path>'
+  + '</svg>';
+
+const THUMB_DOWN_SVG =
+  '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"'
+  + ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+  + '<path d="M17 14V2"></path>'
+  + '<path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H17v12l-4.06 9a1.93 1.93 0 0 1-1.78-1.04 5.93 5.93 0 0 1-.98-4.5z"></path>'
+  + '</svg>';
 
 function markSubmitted(wrap, which) {
   wrap.dataset.state = "submitted";
   wrap.dataset.choice = which;
 }
 
-function revertSubmitted(wrap) {
-  wrap.dataset.state = "idle";
-  delete wrap.dataset.choice;
+function restorePrevious(wrap, previous) {
+  if (previous) {
+    wrap.dataset.state = "submitted";
+    wrap.dataset.choice = previous;
+  } else {
+    wrap.dataset.state = "idle";
+    delete wrap.dataset.choice;
+  }
+}
+
+// Encode the optional UI category as a bracketed prefix on `comment` so
+// the backend's existing schema captures it without a first-class column.
+function encodeComment(category, comment) {
+  if (category && comment) return "[" + category + "] " + comment;
+  if (category) return "[" + category + "]";
+  return comment || null;
 }
 
 async function submitFeedback(traceId, rating, category, comment) {
-  const body = {
-    trace_id: traceId,
-    rating: rating,
-  };
-  if (category) {
-    // Backend doesn't model category as a first-class column; encode it
-    // as a bracketed prefix on comment so the category survives the round
-    // trip and remains recoverable from /v1/feedback queries.
-    body.comment = comment ? "[" + category + "] " + comment : "[" + category + "]";
-  } else if (comment) {
-    body.comment = comment;
-  }
+  const body = { trace_id: traceId, rating: rating };
+  const c = encodeComment(category, comment);
+  if (c !== null) body.comment = c;
 
   const resp = await fetch("/v1/feedback", {
     method: "POST",
@@ -816,16 +901,45 @@ async function submitFeedback(traceId, rating, category, comment) {
   return resp.json();
 }
 
-function showFeedbackModal(onSubmit) {
+// PATCH an existing record. The backend treats `null` fields as
+// "leave unchanged"; we always send rating + comment because the user
+// may flip either or both in a single edit.
+async function patchFeedback(feedbackId, rating, category, comment) {
+  const body = {
+    rating: rating,
+    // Send "" rather than null when there's no comment so the field
+    // gets explicitly cleared on the backend (e.g. flipping from down
+    // back to up — though our UI currently doesn't expose that flow).
+    comment: encodeComment(category, comment) || "",
+  };
+  const resp = await fetch("/v1/feedback/" + encodeURIComponent(feedbackId), {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!resp.ok) {
+    const text = await resp.text().catch(function () { return ""; });
+    throw new Error("HTTP " + resp.status + (text ? " — " + text : ""));
+  }
+  return resp.json();
+}
+
+function showFeedbackModal(prefill, onSubmit) {
+  // Backwards-compat: allow `showFeedbackModal(onSubmit)` calls.
+  if (typeof prefill === "function") {
+    onSubmit = prefill;
+    prefill = {};
+  }
+  prefill = prefill || {};
+
   let modal = document.getElementById("feedback-modal");
   if (!modal) {
     modal = document.createElement("div");
     modal.id = "feedback-modal";
     modal.className = "feedback-modal";
-    const optionsHtml = FEEDBACK_CATEGORIES.map(function (c, i) {
+    const optionsHtml = FEEDBACK_CATEGORIES.map(function (c) {
       return '<label class="feedback-option">'
-        + '<input type="radio" name="feedback-category" value="' + c + '"'
-        + (i === 0 ? " checked" : "") + '> ' + c
+        + '<input type="radio" name="feedback-category" value="' + c + '"> ' + c
         + '</label>';
     }).join("");
     modal.innerHTML = '<div class="feedback-modal-content">'
@@ -852,10 +966,20 @@ function showFeedbackModal(onSubmit) {
       .addEventListener("click", closeFeedbackModal);
   }
 
-  // Reset previous values on every open.
+  // Pre-populate with the caller's last submission (or defaults).
   const radios = modal.querySelectorAll('input[name="feedback-category"]');
-  radios[0].checked = true;
-  modal.querySelector(".feedback-comment").value = "";
+  const wantCategory = prefill.category || FEEDBACK_CATEGORIES[0];
+  let matched = false;
+  radios.forEach(function (r) {
+    if (r.value === wantCategory) {
+      r.checked = true;
+      matched = true;
+    } else {
+      r.checked = false;
+    }
+  });
+  if (!matched && radios.length) radios[0].checked = true;
+  modal.querySelector(".feedback-comment").value = prefill.comment || "";
 
   // Re-bind submit (closure over the new callback).
   const submitBtn = modal.querySelector(".feedback-submit");
