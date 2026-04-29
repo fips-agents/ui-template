@@ -16,6 +16,8 @@ A minimal chat UI that connects to any OpenAI-compatible API endpoint (vLLM, an 
 
 **Inline feedback** -- Thumbs-up/-down on completed assistant messages, with an inline note next to the icon after a thumbs-down submission. The note is editable: clicking it reopens the modal so you can change the category, edit the comment, or flip the rating. Edits PATCH the existing record rather than creating duplicates. Visibility is configurable via the `data-feedback-visibility` attribute on `<body>` in `index.html` -- `hover` (default), `always` (icons always visible, useful for internal/eval/QA tooling), or `off`. Controls are hidden when no `trace_id` is available, so older backends silently degrade.
 
+**File uploads** -- Drag, paste, or click to attach files. Each attachment uploads to `/v1/files` via the proxy with a determinate progress bar; the resulting `file_id` rides along on the next chat completion via `file_ids`. Pre-flight size and MIME validation runs in the browser (configurable via `UI_MAX_FILE_BYTES` / `UI_ALLOWED_MIME`); the gateway is the authoritative gate and surfaces 413 / 415 / 422 directly on the chip when its checks fail.
+
 ## Architecture
 
 The Go server embeds the static frontend into a single binary via `go:embed`. At runtime it does three things:
@@ -55,6 +57,8 @@ Set these environment variables:
 |----------|---------|-------------|
 | `API_URL` | `http://localhost:8080` | OpenAI-compatible chat completions endpoint |
 | `PORT` | `3000` | Server listen port |
+| `UI_MAX_FILE_BYTES` | `26214400` (25 MiB) | Pre-flight client-side size cap. Plain bytes or `k`/`m`/`g` (binary) suffix. The gateway is the authoritative cap. |
+| `UI_ALLOWED_MIME` | -- | Optional comma-separated client-side MIME allowlist (eg `application/pdf,image/*`). Empty defers to the gateway. |
 
 The frontend discovers the API endpoint at runtime via `GET /api/config`, so the same binary works against any backend without rebuilding.
 

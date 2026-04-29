@@ -250,10 +250,45 @@ const messagesEl = document.getElementById("messages");
 const inputEl = document.getElementById("input");
 const sendBtn = document.getElementById("send-btn");
 const chatEl = document.getElementById("chat");
+const attachBtn = document.getElementById("attach-btn");
+const fileInputEl = document.getElementById("file-input");
+const attachmentsEl = document.getElementById("attachments");
+const dropOverlayEl = document.getElementById("drop-overlay");
+const inputForm = document.getElementById("input-form");
+
+// -- File-upload state ------------------------------------------------------
+// Each entry: {id, file, file_id, status: 'uploading'|'ready'|'failed',
+//              progress: 0..1, error?, xhr?}.  `id` is a client-only key
+//              used to keep DOM nodes in sync; `file_id` is what the
+//              gateway returns and is what we send on the chat request.
+const attachments = [];
+let nextAttachmentId = 1;
+let maxFileBytes = 25 * 1024 * 1024; // mirrors gateway default; replaced from /api/config
+let allowedMimePatterns = null;       // null = allow-all (server is authoritative)
+let dragDepth = 0;                    // dragenter/leave fire on each child; depth-count
+                                      // them so the overlay only hides on the final leave
+
+async function loadUiConfig() {
+  try {
+    const resp = await fetch("/api/config");
+    if (!resp.ok) return;
+    const cfg = await resp.json();
+    if (typeof cfg.maxFileBytes === "number" && cfg.maxFileBytes > 0) {
+      maxFileBytes = cfg.maxFileBytes;
+    }
+    if (Array.isArray(cfg.allowedMime) && cfg.allowedMime.length > 0) {
+      allowedMimePatterns = cfg.allowedMime.map(s => String(s).toLowerCase());
+    }
+  } catch (e) {
+    console.warn("Could not load UI config:", e);
+  }
+}
 
 async function init() {
   setupSettings();
+  await loadUiConfig();
   loadAgentInfo();
+  setupFileUploads();
 }
 
 function appendMessage(role, content) {
@@ -453,8 +488,17 @@ function isBlockElement(html) {
 
 function setStreaming(value) {
   streaming = value;
-  sendBtn.disabled = value;
   inputEl.disabled = value;
+  if (attachBtn) attachBtn.disabled = value;
+  // sendBtn state is owned by updateSendButton (it considers both
+  // streaming and in-flight uploads). When the upload state machine
+  // hasn't been wired yet (early init), fall back to direct disable
+  // so the button reflects streaming immediately.
+  if (typeof updateSendButton === "function") {
+    updateSendButton();
+  } else {
+    sendBtn.disabled = value;
+  }
 }
 
 // -- Per-message stream renderer --------------------------------------------
@@ -1024,9 +1068,334 @@ function showRawResponse(chunks) {
   modal.classList.add("open");
 }
 
+// -- File uploads -----------------------------------------------------------
+
+function setupFileUploads() {
+  attachBtn.addEventListener("click", () => {
+    if (streaming) return;
+    fileInputEl.click();
+  });
+
+  fileInputEl.addEventListener("change", () => {
+    handleFiles(fileInputEl.files);
+    // Reset the input so selecting the same file again still fires `change`.
+    fileInputEl.value = "";
+  });
+
+  // Paste support — clipboard items can include images and arbitrary
+  // files (Finder copy-on-Mac copies the file itself, not just the
+  // path).  Use clipboardData.files when available; otherwise walk
+  // items[] looking for kind === "file".
+  inputEl.addEventListener("paste", (e) => {
+    if (streaming) return;
+    const dt = e.clipboardData;
+    if (!dt) return;
+    const files = pasteFiles(dt);
+    if (files.length > 0) {
+      e.preventDefault();
+      handleFiles(files);
+    }
+  });
+
+  // Drag-and-drop — listen on the form so the overlay covers the
+  // input row + chips.  The overlay itself has pointer-events:none so
+  // it doesn't swallow the drop event.
+  inputForm.addEventListener("dragenter", (e) => {
+    if (streaming) return;
+    if (!hasFiles(e.dataTransfer)) return;
+    e.preventDefault();
+    dragDepth++;
+    dropOverlayEl.hidden = false;
+  });
+  inputForm.addEventListener("dragover", (e) => {
+    if (streaming) return;
+    if (!hasFiles(e.dataTransfer)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+  });
+  inputForm.addEventListener("dragleave", () => {
+    if (dragDepth > 0) dragDepth--;
+    if (dragDepth === 0) dropOverlayEl.hidden = true;
+  });
+  inputForm.addEventListener("drop", (e) => {
+    dragDepth = 0;
+    dropOverlayEl.hidden = true;
+    if (streaming) return;
+    if (!hasFiles(e.dataTransfer)) return;
+    e.preventDefault();
+    handleFiles(e.dataTransfer.files);
+  });
+
+  // Block the browser's default "open this file" behavior anywhere
+  // outside the drop zone, so a missed drop doesn't navigate away
+  // from the chat.
+  window.addEventListener("dragover", (e) => {
+    if (hasFiles(e.dataTransfer)) e.preventDefault();
+  });
+  window.addEventListener("drop", (e) => {
+    if (hasFiles(e.dataTransfer) && e.target !== dropOverlayEl
+        && !inputForm.contains(e.target)) {
+      e.preventDefault();
+    }
+  });
+}
+
+function hasFiles(dt) {
+  if (!dt) return false;
+  // types is a DOMStringList — check via for-of so we don't trip on
+  // browser quirks where indexOf is missing.
+  for (const t of dt.types || []) {
+    if (t === "Files") return true;
+  }
+  return false;
+}
+
+function pasteFiles(dt) {
+  const out = [];
+  if (dt.files && dt.files.length > 0) {
+    for (const f of dt.files) out.push(f);
+    if (out.length > 0) return out;
+  }
+  if (dt.items) {
+    for (const item of dt.items) {
+      if (item.kind === "file") {
+        const f = item.getAsFile();
+        if (f) out.push(f);
+      }
+    }
+  }
+  return out;
+}
+
+function handleFiles(fileList) {
+  for (const file of fileList) {
+    addAttachment(file);
+  }
+}
+
+function addAttachment(file) {
+  const att = {
+    id: "att_" + (nextAttachmentId++),
+    file: file,
+    file_id: null,
+    status: "uploading",
+    progress: 0,
+    error: null,
+    xhr: null,
+  };
+
+  // Pre-flight client-side validation. Cheap checks so the user
+  // doesn't watch a giant file upload only to be 413'd.
+  if (maxFileBytes > 0 && file.size > maxFileBytes) {
+    att.status = "failed";
+    att.error = "File exceeds max size (" + formatBytes(maxFileBytes) + ")";
+  } else if (allowedMimePatterns && !mimeAllowed(file.type, allowedMimePatterns)) {
+    att.status = "failed";
+    att.error = "File type not allowed";
+  }
+
+  attachments.push(att);
+  renderAttachments();
+
+  if (att.status === "uploading") {
+    uploadAttachment(att);
+  }
+  updateSendButton();
+}
+
+function mimeAllowed(ct, patterns) {
+  const norm = (ct || "").toLowerCase().split(";")[0].trim();
+  if (!norm) return false;
+  for (const p of patterns) {
+    if (p === norm) return true;
+    if (p.endsWith("/*") && norm.startsWith(p.slice(0, -1))) return true;
+  }
+  return false;
+}
+
+function uploadAttachment(att) {
+  const fd = new FormData();
+  fd.append("file", att.file, att.file.name);
+
+  const xhr = new XMLHttpRequest();
+  att.xhr = xhr;
+  xhr.open("POST", "/v1/files");
+
+  xhr.upload.addEventListener("progress", (e) => {
+    if (!e.lengthComputable) return;
+    att.progress = e.loaded / e.total;
+    renderAttachments();
+  });
+
+  xhr.addEventListener("load", () => {
+    att.xhr = null;
+    if (xhr.status >= 200 && xhr.status < 300) {
+      try {
+        const body = JSON.parse(xhr.responseText);
+        if (body.file_id) {
+          att.file_id = body.file_id;
+          att.status = "ready";
+          att.progress = 1;
+        } else {
+          att.status = "failed";
+          att.error = "Upload returned no file_id";
+        }
+      } catch (e) {
+        att.status = "failed";
+        att.error = "Could not parse upload response";
+      }
+    } else {
+      att.status = "failed";
+      att.error = describeUploadError(xhr);
+    }
+    renderAttachments();
+    updateSendButton();
+  });
+
+  xhr.addEventListener("error", () => {
+    att.xhr = null;
+    att.status = "failed";
+    att.error = "Network error during upload";
+    renderAttachments();
+    updateSendButton();
+  });
+
+  xhr.addEventListener("abort", () => {
+    att.xhr = null;
+    // Removed by user; nothing to do.
+  });
+
+  xhr.send(fd);
+}
+
+function describeUploadError(xhr) {
+  if (xhr.status === 413) return "File too large";
+  if (xhr.status === 415) return "File type not allowed";
+  if (xhr.status === 422) return "File rejected (virus scan)";
+  if (xhr.status === 0)   return "Upload aborted";
+  // Try to extract a JSON error message; fall back to status text.
+  try {
+    const body = JSON.parse(xhr.responseText);
+    if (body && typeof body.error === "string") return body.error;
+  } catch {}
+  return "Upload failed (HTTP " + xhr.status + ")";
+}
+
+function removeAttachment(id) {
+  const i = attachments.findIndex(a => a.id === id);
+  if (i < 0) return;
+  const att = attachments[i];
+  if (att.xhr) {
+    try { att.xhr.abort(); } catch {}
+  }
+  attachments.splice(i, 1);
+  renderAttachments();
+  updateSendButton();
+}
+
+function renderAttachments() {
+  if (attachments.length === 0) {
+    attachmentsEl.hidden = true;
+    attachmentsEl.replaceChildren();
+    return;
+  }
+  attachmentsEl.hidden = false;
+  attachmentsEl.replaceChildren(...attachments.map(renderChip));
+}
+
+function renderChip(att) {
+  const el = document.createElement("div");
+  el.className = "attachment";
+  if (att.status === "uploading") el.classList.add("uploading");
+  if (att.status === "failed") el.classList.add("failed");
+  el.dataset.id = att.id;
+
+  const icon = document.createElement("span");
+  icon.className = "attachment-icon";
+  icon.innerHTML = fileIconSvg(att.file.type);
+  el.appendChild(icon);
+
+  const name = document.createElement("span");
+  name.className = "attachment-name";
+  name.textContent = att.file.name;
+  name.title = att.file.name;
+  el.appendChild(name);
+
+  const size = document.createElement("span");
+  size.className = "attachment-size";
+  size.textContent = formatBytes(att.file.size);
+  el.appendChild(size);
+
+  if (att.status === "failed" && att.error) {
+    const err = document.createElement("span");
+    err.className = "attachment-error-text";
+    err.textContent = "— " + att.error;
+    err.title = att.error;
+    el.appendChild(err);
+  }
+
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "attachment-remove";
+  remove.setAttribute("aria-label", "Remove attachment");
+  remove.textContent = "×";
+  remove.addEventListener("click", () => removeAttachment(att.id));
+  el.appendChild(remove);
+
+  if (att.status === "uploading" || att.status === "failed") {
+    const bar = document.createElement("div");
+    bar.className = "attachment-progress";
+    bar.style.width = Math.max(2, Math.round(att.progress * 100)) + "%";
+    el.appendChild(bar);
+  }
+
+  return el;
+}
+
+function fileIconSvg(mime) {
+  const s = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">`;
+  if (mime && mime.startsWith("image/")) {
+    return s + `<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21,15 16,10 5,21"/></svg>`;
+  }
+  if (mime === "application/pdf") {
+    return s + `<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>`;
+  }
+  return s + `<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="13" y2="17"/></svg>`;
+}
+
+function formatBytes(n) {
+  if (n < 1024) return n + " B";
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
+  if (n < 1024 * 1024 * 1024) return (n / (1024 * 1024)).toFixed(1) + " MB";
+  return (n / (1024 * 1024 * 1024)).toFixed(2) + " GB";
+}
+
+function updateSendButton() {
+  // Disable send while any attachment is still uploading. Failed
+  // attachments don't block — the user can either remove them or
+  // send anyway (they're effectively no-ops since they have no
+  // file_id).
+  const anyUploading = attachments.some(a => a.status === "uploading");
+  sendBtn.disabled = streaming || anyUploading;
+}
+
+function readyFileIds() {
+  return attachments.filter(a => a.status === "ready" && a.file_id).map(a => a.file_id);
+}
+
+function clearAttachmentsAfterSend() {
+  attachments.length = 0;
+  renderAttachments();
+  updateSendButton();
+}
+
 async function sendMessage() {
   const text = inputEl.value.trim();
   if (!text || streaming) return;
+  // Refuse to send while uploads are in flight.  setStreaming will
+  // re-disable the send button anyway, but we want a hard refusal
+  // here to avoid racing the upload completion.
+  if (attachments.some(a => a.status === "uploading")) return;
 
   inputEl.value = "";
   autoResize();
@@ -1045,8 +1414,16 @@ async function sendMessage() {
 
   setStreaming(true);
 
+  // Snapshot the file_ids that are ready *now*; don't include
+  // anything that finishes uploading after we've started the
+  // request. Clear the chip list immediately so the user gets visual
+  // feedback that the attachment was consumed.
+  const fileIds = readyFileIds();
+  clearAttachmentsAfterSend();
+
   try {
     const reqBody = { messages: messages, stream: true };
+    if (fileIds.length > 0) reqBody.file_ids = fileIds;
     if (userTemperature !== null) reqBody.temperature = userTemperature;
     if (userMaxTokens !== null) reqBody.max_tokens = userMaxTokens;
     if (userTopP !== null) reqBody.top_p = userTopP;

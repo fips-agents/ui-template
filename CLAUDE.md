@@ -40,6 +40,14 @@ The project has two layers:
 |----------|---------|-------------|
 | `API_URL` | `http://localhost:8080` | OpenAI-compatible API endpoint |
 | `PORT` | `3000` | Server listen port |
+| `UI_MAX_FILE_BYTES` | `26214400` (25 MiB) | Pre-flight client-side size cap surfaced via `/api/config`. Plain bytes or `k`/`m`/`g` (binary) suffix. The gateway is the authoritative cap; this is only used to fail fast in the browser. |
+| `UI_ALLOWED_MIME` | -- | Optional comma-separated client-side MIME allowlist surfaced via `/api/config`. Empty defers entirely to the gateway. |
+
+## File uploads
+
+The chat input supports drag-and-drop, paste, and a file-picker button. Each attached file is `POST`'d to `/v1/files` (proxied through the UI server to the gateway, which streams it to the agent), and the resulting `file_id` is included in the `file_ids` array on the next `POST /v1/chat/completions`. Uploads use `XMLHttpRequest` so the chip shows real upload progress.
+
+Pre-flight client-side validation against `UI_MAX_FILE_BYTES` and `UI_ALLOWED_MIME` is best-effort — the gateway re-validates and returns 413 / 415 / 422 (virus scan) on its own, and those errors surface on the chip too. The send button is disabled while any chip is still uploading; failed chips don't block sending (they're effectively no-ops since they have no `file_id`).
 
 ## Deployment to OpenShift
 

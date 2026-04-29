@@ -17,6 +17,12 @@ import (
 // buildMux creates the same ServeMux as main(), wired to the given backend URL
 // and apiURL config string.
 func buildMux(backendURL *url.URL, apiURL string) *http.ServeMux {
+	return buildMuxWithFiles(backendURL, apiURL, defaultMaxFileBytes, "")
+}
+
+// buildMuxWithFiles is the variant used by tests that exercise the
+// /api/config file-upload knobs.
+func buildMuxWithFiles(backendURL *url.URL, apiURL string, maxFileBytes int64, allowedMime string) *http.ServeMux {
 	proxy := &httputil.ReverseProxy{
 		Director: func(r *http.Request) {
 			r.URL.Scheme = backendURL.Scheme
@@ -26,13 +32,29 @@ func buildMux(backendURL *url.URL, apiURL string) *http.ServeMux {
 		FlushInterval: -1,
 	}
 
+	configPayload := map[string]any{
+		"apiUrl":       apiURL,
+		"maxFileBytes": maxFileBytes,
+	}
+	if allowedMime != "" {
+		var list []string
+		for _, raw := range strings.Split(allowedMime, ",") {
+			if v := strings.TrimSpace(strings.ToLower(raw)); v != "" {
+				list = append(list, v)
+			}
+		}
+		if len(list) > 0 {
+			configPayload["allowedMime"] = list
+		}
+	}
+
 	mux := http.NewServeMux()
 
 	mux.Handle("/v1/", proxy)
 
 	mux.HandleFunc("GET /api/config", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"apiUrl": apiURL})
+		_ = json.NewEncoder(w).Encode(configPayload)
 	})
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -163,12 +185,86 @@ func TestAPIConfig(t *testing.T) {
 		t.Errorf("GET /api/config status = %d, want %d", resp.StatusCode, http.StatusOK)
 	}
 
-	var result map[string]string
+	var result map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		t.Fatalf("GET /api/config decode JSON: %v", err)
 	}
 	if result["apiUrl"] != wantURL {
 		t.Errorf("GET /api/config apiUrl = %q, want %q", result["apiUrl"], wantURL)
+	}
+	// JSON numbers decode as float64. The default cap is 25 MiB.
+	if got, want := result["maxFileBytes"].(float64), float64(defaultMaxFileBytes); got != want {
+		t.Errorf("maxFileBytes = %v, want %v", got, want)
+	}
+	if _, ok := result["allowedMime"]; ok {
+		t.Errorf("allowedMime should be omitted by default, got %v", result["allowedMime"])
+	}
+}
+
+func TestAPIConfig_FileUploadOverrides(t *testing.T) {
+	backendURL, _ := url.Parse("http://unused:9090")
+	mux := buildMuxWithFiles(backendURL, "http://unused:9090", 5*1024*1024, "application/pdf, image/*")
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/config")
+	if err != nil {
+		t.Fatalf("GET /api/config: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var result map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got := result["maxFileBytes"].(float64); got != 5*1024*1024 {
+		t.Errorf("maxFileBytes = %v, want 5 MiB", got)
+	}
+	mime, ok := result["allowedMime"].([]any)
+	if !ok {
+		t.Fatalf("allowedMime missing or wrong type: %v", result["allowedMime"])
+	}
+	if len(mime) != 2 || mime[0] != "application/pdf" || mime[1] != "image/*" {
+		t.Errorf("allowedMime = %v, want [application/pdf image/*]", mime)
+	}
+}
+
+func TestParseBytes(t *testing.T) {
+	cases := []struct {
+		in     string
+		want   int64
+		errOK  bool
+		errSub string
+	}{
+		{"", defaultMaxFileBytes, false, ""},
+		{"1024", 1024, false, ""},
+		{"5k", 5 * 1024, false, ""},
+		{"5KiB", 5 * 1024, false, ""},
+		{"25m", 25 * 1024 * 1024, false, ""},
+		{"  2 GiB  ", 2 * 1024 * 1024 * 1024, false, ""},
+		{"0", 0, true, "positive"},
+		{"-5", 0, true, "positive"},
+		{"abc", 0, true, "invalid byte count"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.in, func(t *testing.T) {
+			got, err := parseBytes(tc.in, defaultMaxFileBytes)
+			if tc.errOK {
+				if err == nil {
+					t.Fatalf("parseBytes(%q): want error, got %d", tc.in, got)
+				}
+				if tc.errSub != "" && !strings.Contains(err.Error(), tc.errSub) {
+					t.Errorf("parseBytes(%q): error %q, want substring %q", tc.in, err, tc.errSub)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseBytes(%q): unexpected error: %v", tc.in, err)
+			}
+			if got != tc.want {
+				t.Errorf("parseBytes(%q) = %d, want %d", tc.in, got, tc.want)
+			}
+		})
 	}
 }
 
