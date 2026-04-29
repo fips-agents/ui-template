@@ -197,8 +197,157 @@ footer {
   max-width: var(--max-width);
   margin: 0 auto;
   display: flex;
+  flex-direction: column;
+  gap: 8px;
+  position: relative;
+}
+
+.input-row {
+  display: flex;
   gap: 8px;
   align-items: flex-end;
+}
+
+.attach-btn {
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--color-border);
+  border-radius: 50%;
+  background: var(--color-bg);
+  color: var(--color-fg-muted, #6b7280);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.attach-btn:hover:not(:disabled) {
+  background: var(--color-bg-elevated, #f3f4f6);
+  color: var(--color-fg, #111827);
+  border-color: var(--color-accent);
+}
+
+.attach-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* -- Attachment chips ----------------------------------------------------- */
+.attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 0;
+}
+
+.attachment {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px 4px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 16px;
+  background: var(--color-bg-elevated, #f3f4f6);
+  font-size: 13px;
+  line-height: 1.3;
+  max-width: 280px;
+  position: relative;
+  overflow: hidden;
+}
+
+.attachment.uploading { opacity: 0.85; }
+
+.attachment.failed {
+  border-color: #dc2626;
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.attachment-icon {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+}
+
+.attachment-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 180px;
+}
+
+.attachment-size {
+  font-size: 11px;
+  color: var(--color-fg-muted, #6b7280);
+  flex-shrink: 0;
+}
+
+.attachment-remove {
+  width: 22px;
+  height: 22px;
+  border: none;
+  background: transparent;
+  border-radius: 50%;
+  cursor: pointer;
+  color: var(--color-fg-muted, #6b7280);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.attachment-remove:hover {
+  background: rgba(0, 0, 0, 0.08);
+  color: var(--color-fg, #111827);
+}
+
+.attachment-progress {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  background: var(--color-accent);
+  width: 0;
+  transition: width 0.15s linear;
+}
+
+.attachment.failed .attachment-progress { background: #dc2626; }
+
+.attachment-error-text {
+  font-size: 11px;
+  color: #991b1b;
+  margin-left: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 180px;
+}
+
+/* -- Drop overlay --------------------------------------------------------- */
+.drop-overlay {
+  position: absolute;
+  inset: 0;
+  border: 2px dashed var(--color-accent);
+  border-radius: var(--radius);
+  background: rgba(59, 130, 246, 0.08);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 10;
+}
+
+.drop-overlay-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-accent);
+  font-weight: 500;
 }
 
 #input {
