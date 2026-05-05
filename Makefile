@@ -1,7 +1,8 @@
-PROJECT     ?= ui-template
-IMAGE_NAME  ?= ui-template
-IMAGE_TAG   ?= latest
-PORT        ?= 3000
+PROJECT       ?= ui-template
+RELEASE_NAME  ?= ui-template
+IMAGE_NAME    ?= ui-template
+IMAGE_TAG     ?= latest
+PORT          ?= 3000
 
 .PHONY: build run test lint image-build deploy clean help
 
@@ -20,11 +21,15 @@ lint: ## Run go vet
 image-build: ## Build container image
 	podman build --platform linux/amd64 -t $(IMAGE_NAME):$(IMAGE_TAG) -f Containerfile . --no-cache
 
-deploy: ## Deploy to OpenShift
-	helm upgrade --install $(PROJECT) chart/ -n $(PROJECT) --wait
+deploy: ## Deploy to OpenShift via Helm (make deploy PROJECT=<ns>)
+	helm upgrade --install $(RELEASE_NAME) chart/ \
+		-n $(PROJECT) \
+		--set image.repository=image-registry.openshift-image-registry.svc:5000/$(PROJECT)/$(IMAGE_NAME) \
+		--set image.tag=$(IMAGE_TAG) \
+		--wait
 
 clean: ## Remove build artifacts
 	rm -rf bin/
 
 help: ## Show this help
-	@grep -E '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
