@@ -52,21 +52,21 @@ Pre-flight client-side validation against `UI_MAX_FILE_BYTES` and `UI_ALLOWED_MI
 ## Deployment to OpenShift
 
 ```bash
-# Build container
-make image-build
-
-# Push to registry (adjust for your registry)
-podman tag ui-template:latest registry.example.com/my-project/ui-template:latest
-podman push registry.example.com/my-project/ui-template:latest
+# Build on the cluster via BuildConfig + ImageStream
+make build-openshift PROJECT=my-project
 
 # Deploy via Helm
-helm upgrade --install my-ui chart/ -n my-project \
-  --set image.repository=registry.example.com/my-project/ui-template \
-  --set config.API_URL=http://my-agent:8080
-
-# Or use the Makefile shortcut
 make deploy PROJECT=my-project
 ```
+
+`PROJECT` is the target namespace only. `RELEASE_NAME` (Helm release name) and `IMAGE_NAME` (ImageStream / BuildConfig / image name) default to the chart name (`ui-template`) and can be overridden independently — important when the UI shares a namespace with another release that already uses those identifiers, e.g. an agent in `calculus-agent`:
+
+```bash
+make build-openshift PROJECT=calculus-agent IMAGE_NAME=calculus-ui
+make deploy PROJECT=calculus-agent RELEASE_NAME=calculus-ui IMAGE_NAME=calculus-ui
+```
+
+For local builds (e.g. for testing), `make image-build` produces a podman image that you'd push to a registry the cluster can pull from; override `image.repository`/`image.tag` on `helm upgrade` accordingly.
 
 ## How the UI Discovers the API
 
@@ -79,7 +79,7 @@ This is a template repository. During scaffolding, `"ui-template"` is replaced w
 - `go.mod` module path
 - `Chart.yaml` name
 - `Containerfile` label
-- `Makefile` PROJECT/IMAGE_NAME defaults
+- `Makefile` PROJECT/RELEASE_NAME/IMAGE_NAME defaults
 - `chart/values.yaml` image repository
 - `chart/templates/_helpers.tpl` template names
 - `llms.txt` H1 title and GitHub URLs

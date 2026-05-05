@@ -64,11 +64,21 @@ The frontend discovers the API endpoint at runtime via `GET /api/config`, so the
 
 ## Deployment
 
-Build the container and deploy to OpenShift:
+Build the container on OpenShift and deploy via Helm:
 
 ```bash
-make image-build
+make build-openshift PROJECT=my-project
 make deploy PROJECT=my-project
 ```
+
+`build-openshift` creates an `ImageStream` and `BuildConfig` (named after `IMAGE_NAME`, defaulting to the chart name) on first run, then runs a binary build from the working directory. `deploy` installs the Helm chart and points `image.repository` at the internal registry path for that namespace.
+
+`PROJECT` is the target namespace. `RELEASE_NAME` (Helm release) and `IMAGE_NAME` (ImageStream / BuildConfig / image) default to the chart name and can be overridden independently — useful when the UI shares a namespace with another release that already owns those identifiers:
+
+```bash
+make deploy PROJECT=calculus-agent RELEASE_NAME=calculus-ui IMAGE_NAME=calculus-ui
+```
+
+For a local image build instead, `make image-build` builds with podman; you'll need to push the result to a registry the cluster can pull from and override `image.repository` accordingly.
 
 See `chart/values.yaml` for Helm configuration, including `config.API_URL` to point at your backend service.

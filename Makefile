@@ -4,7 +4,7 @@ IMAGE_NAME    ?= ui-template
 IMAGE_TAG     ?= latest
 PORT          ?= 3000
 
-.PHONY: build run test lint image-build deploy clean help
+.PHONY: build run test lint image-build build-openshift deploy clean help
 
 build: ## Build the UI server binary
 	go build -o bin/server ./cmd/server
@@ -20,6 +20,13 @@ lint: ## Run go vet
 
 image-build: ## Build container image
 	podman build --platform linux/amd64 -t $(IMAGE_NAME):$(IMAGE_TAG) -f Containerfile . --no-cache
+
+build-openshift: ## Build on OpenShift via BuildConfig (make build-openshift PROJECT=<ns>)
+	@if ! oc get bc $(IMAGE_NAME) -n $(PROJECT) &>/dev/null; then \
+		echo "Creating BuildConfig and ImageStream $(IMAGE_NAME) in $(PROJECT)..."; \
+		sed 's/PLACEHOLDER/$(IMAGE_NAME)/g' build/buildconfig.yaml | oc apply -n $(PROJECT) -f -; \
+	fi
+	oc start-build $(IMAGE_NAME) --from-dir=. -n $(PROJECT) --follow
 
 deploy: ## Deploy to OpenShift via Helm (make deploy PROJECT=<ns>)
 	helm upgrade --install $(RELEASE_NAME) chart/ \
