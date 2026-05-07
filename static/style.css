@@ -341,6 +341,10 @@ footer {
   z-index: 10;
 }
 
+.drop-overlay[hidden] {
+  display: none;
+}
+
 .drop-overlay-inner {
   display: flex;
   flex-direction: column;
