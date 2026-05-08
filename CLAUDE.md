@@ -32,6 +32,7 @@ The project has two layers:
 - Fetches `/api/config` on load; fetches `/v1/agent-info` to populate a settings panel with model info, parameters, tools, and system prompt
 - Posts to the local `/v1/chat/completions` proxy with `stream: true`
 - Parses SSE responses with streaming display, reasoning/thinking content panel, tool call visualization, and stream metrics (tokens/s, inter-token latency)
+- **Subagent delegation rendering** — handles `delta.subagent` events emitted by fipsagents 0.22.0+ agents that use the subagent-as-tool feature. Renders a delegation card per `span_id` that transitions through `invoked` → `completed` / `failed` states. The subagent's content is folded into the parent assistant message via the parent's normal `content` deltas; the card surfaces only the delegation framing (target agent, task, status, token totals on completion). Style mirrors the existing tool-call pill (`.tool-call` ↔ `.subagent-delegation`).
 - Maintains conversation history in memory
 
 ## Configuration
