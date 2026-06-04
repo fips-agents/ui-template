@@ -520,6 +520,12 @@ function createStreamRenderer(assistantEl) {
   // Per-tool state: index -> { pillEl, nameEl, statusEl, argsEl, resultEl, args, name, callId }
   const toolCalls = new Map();
 
+  // Per-subagent-delegation state: span_id -> { cardEl, statusEl, footerEl }
+  const subagentCards = new Map();
+
+  // Callback invoked when the user clicks an ask_user option button.
+  let questionAnswerCallback = null;
+
   function ensureThinkingPanel() {
     if (thinkingPanel) return;
     thinkingPanel = document.createElement("details");
@@ -617,6 +623,130 @@ function createStreamRenderer(assistantEl) {
     match.statusEl.textContent = isError ? "error" : "done";
     match.resultEl.style.display = "block";
     match.resultEl.textContent = content;
+    scrollToBottom();
+  }
+
+  function startSubagentCard(ev) {
+    const card = document.createElement("div");
+    card.className = "subagent-delegation running";
+
+    const header = document.createElement("div");
+    header.className = "subagent-header";
+
+    const icon = document.createElement("span");
+    icon.className = "subagent-icon";
+    icon.textContent = "\u{1F916}"; // robot face
+
+    const nameEl = document.createElement("span");
+    nameEl.className = "subagent-name";
+    nameEl.textContent = ev.agent_name;
+
+    const statusEl = document.createElement("span");
+    statusEl.className = "subagent-status";
+    statusEl.textContent = "delegating…";
+
+    header.appendChild(icon);
+    header.appendChild(nameEl);
+    header.appendChild(statusEl);
+    card.appendChild(header);
+
+    // Task preview — truncated with a <details> toggle for the full text.
+    const task = ev.task || "";
+    const truncated = task.length > 120 ? task.slice(0, 120) + "…" : task;
+    if (task.length > 120) {
+      const taskDetails = document.createElement("details");
+      taskDetails.className = "subagent-task-details";
+      const taskSummary = document.createElement("summary");
+      taskSummary.className = "subagent-task";
+      taskSummary.textContent = truncated;
+      const taskFull = document.createElement("div");
+      taskFull.className = "subagent-task-full";
+      taskFull.textContent = task;
+      taskDetails.appendChild(taskSummary);
+      taskDetails.appendChild(taskFull);
+      card.appendChild(taskDetails);
+    } else if (task) {
+      const taskEl = document.createElement("div");
+      taskEl.className = "subagent-task";
+      taskEl.textContent = task;
+      card.appendChild(taskEl);
+    }
+
+    const footerEl = document.createElement("div");
+    footerEl.className = "subagent-footer";
+    footerEl.style.display = "none";
+    card.appendChild(footerEl);
+
+    assistantEl.appendChild(card);
+    subagentCards.set(ev.span_id, { cardEl: card, statusEl, footerEl });
+    scrollToBottom();
+  }
+
+  function completeSubagentCard(ev) {
+    const entry = subagentCards.get(ev.span_id);
+    if (!entry) return;
+    entry.cardEl.classList.remove("running");
+    entry.cardEl.classList.add("done");
+    entry.statusEl.textContent = "done";
+
+    const tokensUsed = ev.tokens_used || {};
+    const total = (tokensUsed.input_tokens || 0) + (tokensUsed.output_tokens || 0);
+    const parts = [];
+    if (total > 0) parts.push(total.toLocaleString() + " tokens");
+    if (ev.cost_usd != null) parts.push("$" + ev.cost_usd.toFixed(4));
+    if (ev.tool_calls_made != null) parts.push(ev.tool_calls_made + " tool call" + (ev.tool_calls_made === 1 ? "" : "s"));
+    if (parts.length > 0) {
+      entry.footerEl.textContent = parts.join(" · ");
+      entry.footerEl.style.display = "block";
+    }
+    scrollToBottom();
+  }
+
+  function failSubagentCard(ev) {
+    const entry = subagentCards.get(ev.span_id);
+    if (!entry) return;
+    entry.cardEl.classList.remove("running");
+    entry.cardEl.classList.add("error");
+    entry.statusEl.textContent = "failed";
+    if (ev.error_message) {
+      entry.footerEl.textContent = (ev.error_type ? ev.error_type + ": " : "") + ev.error_message;
+      entry.footerEl.style.display = "block";
+    }
+    scrollToBottom();
+  }
+
+  function renderQuestion(ev) {
+    ensureResponseEl();
+    responseText += ev.question_text;
+    responseEl.innerHTML = renderContent(responseText);
+
+    if (Array.isArray(ev.options) && ev.options.length > 0) {
+      const container = document.createElement("div");
+      container.className = "question-options";
+
+      for (const opt of ev.options) {
+        const label = (typeof opt === "object" && opt !== null && opt.label) ? opt.label : String(opt);
+        const value = (typeof opt === "object" && opt !== null) ? (opt.value !== undefined ? opt.value : opt) : opt;
+
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "question-option-btn";
+        btn.textContent = label;
+        btn.addEventListener("click", function () {
+          if (questionAnswerCallback) {
+            questionAnswerCallback(value);
+          }
+          container.classList.add("answered");
+          for (const b of container.querySelectorAll(".question-option-btn")) {
+            b.disabled = true;
+          }
+        });
+        container.appendChild(btn);
+      }
+
+      assistantEl.appendChild(container);
+    }
+
     scrollToBottom();
   }
 
@@ -741,6 +871,24 @@ function createStreamRenderer(assistantEl) {
       if (delta.role === "tool" && delta.tool_call_id) {
         completeToolCall(delta.tool_call_id, delta.content || "", false);
       }
+      // Subagent delegation events (invoked / completed / failed).
+      // type:"delta" is forward-compat only — log and ignore.
+      if (delta.subagent) {
+        const sa = delta.subagent;
+        if (sa.type === "invoked") {
+          startSubagentCard(sa);
+        } else if (sa.type === "completed") {
+          completeSubagentCard(sa);
+        } else if (sa.type === "failed") {
+          failSubagentCard(sa);
+        } else {
+          console.debug("[subagent] unhandled type:", sa.type, sa);
+        }
+      }
+      // Question events (ask_user)
+      if (delta.question && delta.question.type === "asked") {
+        renderQuestion(delta.question);
+      }
       // Assistant content (the user-visible response)
       if (delta.content && delta.role !== "tool") {
         appendContent(delta.content);
@@ -753,6 +901,7 @@ function createStreamRenderer(assistantEl) {
     getResponseText: () => responseText,
     pushRawChunk,
     getRawChunks: () => rawChunks,
+    setQuestionAnswerCallback(fn) { questionAnswerCallback = fn; },
   };
 }
 
@@ -1409,6 +1558,10 @@ async function sendMessage() {
   scrollToBottom();
 
   const renderer = createStreamRenderer(assistantEl);
+  renderer.setQuestionAnswerCallback(function (optionText) {
+    inputEl.value = typeof optionText === "string" ? optionText : JSON.stringify(optionText);
+    setTimeout(() => sendMessage(), 0);
+  });
   const requestStart = performance.now();
   let clientTtft = null;
 

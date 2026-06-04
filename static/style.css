@@ -585,6 +585,158 @@ footer {
   color: #b91c1c;
 }
 
+/* Subagent delegation cards — rendered inline in the assistant turn when the
+   agent delegates work to a peer agent. Structurally similar to .tool-call
+   but slightly more prominent (no <details> collapse, wider padding). */
+
+.subagent-delegation {
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.6);
+  font-size: 13px;
+  margin: 6px 0;
+}
+
+.subagent-delegation.running {
+  border-color: var(--color-accent);
+  background: rgba(59, 130, 246, 0.06);
+}
+
+.subagent-delegation.done {
+  border-color: #10b981;
+  background: rgba(16, 185, 129, 0.04);
+}
+
+.subagent-delegation.error {
+  border-color: #dc2626;
+  background: rgba(220, 38, 38, 0.04);
+}
+
+.subagent-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 500;
+}
+
+.subagent-icon {
+  font-size: 14px;
+}
+
+.subagent-name {
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+  color: var(--color-text);
+}
+
+.subagent-status {
+  margin-left: auto;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--color-text-dim);
+}
+
+.subagent-delegation.running .subagent-status {
+  color: var(--color-accent);
+}
+
+.subagent-delegation.running .subagent-status::after {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  margin-left: 6px;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.subagent-delegation.done .subagent-status {
+  color: #047857;
+}
+
+.subagent-delegation.error .subagent-status {
+  color: #b91c1c;
+}
+
+.subagent-task {
+  margin-top: 6px;
+  color: var(--color-text-dim);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.subagent-task-details {
+  margin-top: 6px;
+}
+
+.subagent-task-details > summary {
+  color: var(--color-text-dim);
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
+  list-style: none;
+}
+
+.subagent-task-details > summary::marker,
+.subagent-task-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.subagent-task-full {
+  margin-top: 4px;
+  color: var(--color-text-dim);
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+}
+
+.subagent-footer {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--color-text-dim);
+}
+
+.subagent-delegation.error .subagent-footer {
+  color: #b91c1c;
+}
+
+/* Question options -- clickable answer buttons rendered when the agent
+   asks the user a question via ask_user. */
+
+.question-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.question-option-btn {
+  padding: 6px 14px;
+  border: 1px solid var(--color-accent);
+  border-radius: 16px;
+  background: transparent;
+  color: var(--color-accent);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.question-option-btn:hover {
+  background: var(--color-accent);
+  color: #fff;
+}
+
+.question-option-btn:active {
+  opacity: 0.8;
+}
+
+.question-option-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 /* Response content -- the user-visible final answer. The streaming
    indicator (cursor) is a separate element that lives next to it. */
 .response-content {
