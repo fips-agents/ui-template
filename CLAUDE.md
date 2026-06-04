@@ -33,6 +33,8 @@ The project has two layers:
 - Posts to the local `/v1/chat/completions` proxy with `stream: true`
 - Parses SSE responses with streaming display, reasoning/thinking content panel, tool call visualization, and stream metrics (tokens/s, inter-token latency)
 - **Subagent delegation rendering** — handles `delta.subagent` events emitted by fipsagents 0.22.0+ agents that use the subagent-as-tool feature. Renders a delegation card per `span_id` that transitions through `invoked` → `completed` / `failed` states. The subagent's content is folded into the parent assistant message via the parent's normal `content` deltas; the card surfaces only the delegation framing (target agent, task, status, token totals on completion). Style mirrors the existing tool-call pill (`.tool-call` ↔ `.subagent-delegation`).
+- **ask_user question rendering** — when the `ask_user` tool completes, `completeToolCall` parses the result JSON, extracts the `prompt` and `options`, and calls `renderQuestion()` to surface the question as visible chat content with clickable pill-shaped option buttons. Clicking a button sends the selected value as the next user message. Also handles `delta.question` events as a forward-compat path if the framework emits them directly.
+- **Markdown table rendering** — `renderTable()` detects pipe-delimited table rows in the line-by-line markdown loop, parses header/separator/body rows into `<table>` HTML with `<thead>`/`<tbody>`, styled with borders, header shading, and zebra striping.
 - Maintains conversation history in memory
 
 ## Configuration
