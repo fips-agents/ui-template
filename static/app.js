@@ -385,9 +385,27 @@ function renderContent(text) {
     var out = [];
     var listType = null;
     var listItems = [];
+    var tableRows = null;
 
     for (var i = 0; i < lines.length; i++) {
       var line = lines[i];
+
+      // Table rows: lines that start and end with |
+      if (/^\|(?:[^|]+\|)+$/.test(line)) {
+        if (listType) {
+          out.push("<" + listType + ">" + listItems.join("") + "</" + listType + ">");
+          listType = null;
+          listItems = [];
+        }
+        if (!tableRows) tableRows = [];
+        tableRows.push(line);
+        continue;
+      }
+
+      if (tableRows) {
+        out.push(renderTable(tableRows));
+        tableRows = null;
+      }
 
       var ulMatch = /^(\-|\*) (.+)$/.exec(line);
       var olMatch = /^(\d+)\. (.+)$/.exec(line);
@@ -426,6 +444,10 @@ function renderContent(text) {
       }
 
       out.push(processInline(line));
+    }
+
+    if (tableRows) {
+      out.push(renderTable(tableRows));
     }
 
     if (listType) {
@@ -473,6 +495,38 @@ function renderContent(text) {
   return result;
 }
 
+function renderTable(rows) {
+  function splitCells(row) {
+    return row.replace(/^\|/, "").replace(/\|$/, "").split("|").map(function (c) { return c.trim(); });
+  }
+
+  var headerCells = splitCells(rows[0]);
+  var bodyStart = 1;
+
+  // Detect and skip separator row (e.g. |---|---|)
+  if (rows.length > 1 && /^\|[\s\-:]+(\|[\s\-:]+)*\|$/.test(rows[1])) {
+    bodyStart = 2;
+  }
+
+  var html = "<table><thead><tr>";
+  for (var h = 0; h < headerCells.length; h++) {
+    html += "<th>" + processInline(headerCells[h]) + "</th>";
+  }
+  html += "</tr></thead><tbody>";
+
+  for (var r = bodyStart; r < rows.length; r++) {
+    var cells = splitCells(rows[r]);
+    html += "<tr>";
+    for (var c = 0; c < cells.length; c++) {
+      html += "<td>" + processInline(cells[c] || "") + "</td>";
+    }
+    html += "</tr>";
+  }
+
+  html += "</tbody></table>";
+  return html;
+}
+
 function processInline(text) {
   text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
   text = text.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
@@ -482,7 +536,7 @@ function processInline(text) {
 
 function isBlockElement(html) {
   if (!html) return false;
-  return /^<(h[1-3]|ul|ol|pre|p|blockquote)[\s>]/.test(html)
+  return /^<(h[1-3]|ul|ol|pre|p|blockquote|table)[\s>]/.test(html)
       || /^\x00CODEBLOCK\d+\x00$/.test(html);
 }
 
