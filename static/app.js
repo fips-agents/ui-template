@@ -523,6 +523,9 @@ function createStreamRenderer(assistantEl) {
   // Per-subagent-delegation state: span_id -> { cardEl, statusEl, footerEl }
   const subagentCards = new Map();
 
+  // Callback invoked when the user clicks an ask_user option button.
+  let questionAnswerCallback = null;
+
   function ensureThinkingPanel() {
     if (thinkingPanel) return;
     thinkingPanel = document.createElement("details");
@@ -712,6 +715,41 @@ function createStreamRenderer(assistantEl) {
     scrollToBottom();
   }
 
+  function renderQuestion(ev) {
+    ensureResponseEl();
+    responseText += ev.question_text;
+    responseEl.innerHTML = renderContent(responseText);
+
+    if (Array.isArray(ev.options) && ev.options.length > 0) {
+      const container = document.createElement("div");
+      container.className = "question-options";
+
+      for (const opt of ev.options) {
+        const label = (typeof opt === "object" && opt !== null && opt.label) ? opt.label : String(opt);
+        const value = (typeof opt === "object" && opt !== null) ? (opt.value !== undefined ? opt.value : opt) : opt;
+
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "question-option-btn";
+        btn.textContent = label;
+        btn.addEventListener("click", function () {
+          if (questionAnswerCallback) {
+            questionAnswerCallback(value);
+          }
+          container.classList.add("answered");
+          for (const b of container.querySelectorAll(".question-option-btn")) {
+            b.disabled = true;
+          }
+        });
+        container.appendChild(btn);
+      }
+
+      assistantEl.appendChild(container);
+    }
+
+    scrollToBottom();
+  }
+
   function appendThinking(text) {
     ensureThinkingPanel();
     thinkingContent.textContent += text;
@@ -847,6 +885,10 @@ function createStreamRenderer(assistantEl) {
           console.debug("[subagent] unhandled type:", sa.type, sa);
         }
       }
+      // Question events (ask_user)
+      if (delta.question && delta.question.type === "asked") {
+        renderQuestion(delta.question);
+      }
       // Assistant content (the user-visible response)
       if (delta.content && delta.role !== "tool") {
         appendContent(delta.content);
@@ -859,6 +901,7 @@ function createStreamRenderer(assistantEl) {
     getResponseText: () => responseText,
     pushRawChunk,
     getRawChunks: () => rawChunks,
+    setQuestionAnswerCallback(fn) { questionAnswerCallback = fn; },
   };
 }
 
@@ -1515,6 +1558,10 @@ async function sendMessage() {
   scrollToBottom();
 
   const renderer = createStreamRenderer(assistantEl);
+  renderer.setQuestionAnswerCallback(function (optionText) {
+    inputEl.value = typeof optionText === "string" ? optionText : JSON.stringify(optionText);
+    setTimeout(() => sendMessage(), 0);
+  });
   const requestStart = performance.now();
   let clientTtft = null;
 

@@ -702,6 +702,41 @@ footer {
   color: #b91c1c;
 }
 
+/* Question options -- clickable answer buttons rendered when the agent
+   asks the user a question via ask_user. */
+
+.question-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.question-option-btn {
+  padding: 6px 14px;
+  border: 1px solid var(--color-accent);
+  border-radius: 16px;
+  background: transparent;
+  color: var(--color-accent);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.question-option-btn:hover {
+  background: var(--color-accent);
+  color: #fff;
+}
+
+.question-option-btn:active {
+  opacity: 0.8;
+}
+
+.question-option-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 /* Response content -- the user-visible final answer. The streaming
    indicator (cursor) is a separate element that lives next to it. */
 .response-content {
