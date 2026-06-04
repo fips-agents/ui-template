@@ -623,6 +623,19 @@ function createStreamRenderer(assistantEl) {
     match.statusEl.textContent = isError ? "error" : "done";
     match.resultEl.style.display = "block";
     match.resultEl.textContent = content;
+
+    // Promote ask_user tool results to visible chat content.
+    if (match.name === "ask_user" && !isError && content) {
+      try {
+        const data = JSON.parse(content);
+        const prompt = data.prompt;
+        if (prompt) {
+          renderQuestion(prompt, data.options);
+          match.pillEl.removeAttribute("open");
+        }
+      } catch { /* not JSON — leave as-is */ }
+    }
+
     scrollToBottom();
   }
 
@@ -715,23 +728,28 @@ function createStreamRenderer(assistantEl) {
     scrollToBottom();
   }
 
-  function renderQuestion(ev) {
+  function renderQuestion(text, options) {
     ensureResponseEl();
-    responseText += ev.question_text;
+    responseText += text;
     responseEl.innerHTML = renderContent(responseText);
 
-    if (Array.isArray(ev.options) && ev.options.length > 0) {
+    if (Array.isArray(options) && options.length > 0) {
       const container = document.createElement("div");
       container.className = "question-options";
 
-      for (const opt of ev.options) {
+      for (const opt of options) {
         const label = (typeof opt === "object" && opt !== null && opt.label) ? opt.label : String(opt);
-        const value = (typeof opt === "object" && opt !== null) ? (opt.value !== undefined ? opt.value : opt) : opt;
+        const value = (typeof opt === "object" && opt !== null)
+          ? (opt.value !== undefined ? String(opt.value) : label)
+          : String(opt);
 
         const btn = document.createElement("button");
         btn.type = "button";
         btn.className = "question-option-btn";
         btn.textContent = label;
+        if (typeof opt === "object" && opt !== null && opt.description) {
+          btn.title = opt.description;
+        }
         btn.addEventListener("click", function () {
           if (questionAnswerCallback) {
             questionAnswerCallback(value);
@@ -885,9 +903,9 @@ function createStreamRenderer(assistantEl) {
           console.debug("[subagent] unhandled type:", sa.type, sa);
         }
       }
-      // Question events (ask_user)
+      // Question events (ask_user via delta.question)
       if (delta.question && delta.question.type === "asked") {
-        renderQuestion(delta.question);
+        renderQuestion(delta.question.question_text, delta.question.options);
       }
       // Assistant content (the user-visible response)
       if (delta.content && delta.role !== "tool") {
